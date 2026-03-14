@@ -7,6 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -30,12 +31,21 @@ async function saveToPersistence(userId: string, fileName: string, data: any) {
         await storage.bucket(BUCKET_NAME).file(cloudPath).save(JSON.stringify(data, null, 2));
         return;
     }
-  } catch (err) {}
+  } catch (err) {
+      console.warn(`Failed to save to GCS bucket ${BUCKET_NAME}:`, err);
+  }
   
-  // Local Fallback
-  const userDir = path.join(process.cwd(), 'data', userId);
-  await fs.mkdir(userDir, { recursive: true });
-  await fs.writeFile(path.join(userDir, fileName), JSON.stringify(data, null, 2));
+  // Local Fallback with atomic-like write (write to temp file then rename)
+  try {
+      const userDir = path.join(process.cwd(), 'data', userId);
+      await fs.mkdir(userDir, { recursive: true });
+      const tempFile = path.join(userDir, `${fileName}.tmp`);
+      const targetFile = path.join(userDir, fileName);
+      await fs.writeFile(tempFile, JSON.stringify(data, null, 2));
+      await fs.rename(tempFile, targetFile);
+  } catch (err) {
+      console.error('Failed local fallback saveToPersistence:', err);
+  }
 }
 
 // Helper to load data (Scoped by User)
@@ -49,7 +59,9 @@ async function loadFromPersistence(userId: string, fileName: string, defaultValu
             return JSON.parse(content.toString());
         }
     }
-  } catch (err) {}
+  } catch (err) {
+      console.warn(`Failed to load from GCS bucket ${BUCKET_NAME}:`, err);
+  }
 
   // Local Fallback
   const localPath = path.join(process.cwd(), 'data', userId, fileName);
@@ -59,36 +71,81 @@ async function loadFromPersistence(userId: string, fileName: string, defaultValu
   } catch (e) { return defaultValue; }
 }
 
-// User Database (Local JSON)
+// User Database (Local JSON) - Queue based concurrent protection
 const USERS_FILE = path.join(process.cwd(), 'local_users.json');
+let saveUsersQueue: Promise<void> = Promise.resolve();
+
 async function getUsers() {
     try {
         const content = await fs.readFile(USERS_FILE, 'utf-8');
         return JSON.parse(content);
     } catch (e) { return []; }
 }
+
 async function saveUsers(users: any[]) {
-    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+    const doSave = async () => {
+        try {
+            const tempFile = `${USERS_FILE}.tmp`;
+            await fs.writeFile(tempFile, JSON.stringify(users, null, 2));
+            await fs.rename(tempFile, USERS_FILE);
+        } catch (err) {
+            console.error('Failed to save users:', err);
+        }
+    };
+
+    // Chain onto the queue to ensure sequential writes
+    saveUsersQueue = saveUsersQueue.then(doSave).catch(() => doSave());
+    return saveUsersQueue;
+}
+
+import { promisify } from 'util';
+const scryptAsync = promisify(crypto.scrypt);
+
+// Helper to hash password asynchronously
+async function hashPassword(password: string, salt: string) {
+    const derivedKey = await scryptAsync(password, salt, 64) as Buffer;
+    return derivedKey.toString('hex');
 }
 
 // Auth Endpoints
 app.post('/api/signup', async (req, res) => {
-    const { email, password } = req.body;
-    const users = await getUsers();
-    if (users.find((u: any) => u.email === email)) return res.status(400).json({ error: 'User exists' });
-    
-    const newUser = { id: 'user_' + Date.now(), email, password };
-    users.push(newUser);
-    await saveUsers(users);
-    res.json({ id: newUser.id, email: newUser.email });
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+        const users = await getUsers();
+        if (users.find((u: any) => u.email === email)) return res.status(409).json({ error: 'User exists' });
+
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hashedPassword = await hashPassword(password, salt);
+        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt };
+        users.push(newUser);
+        await saveUsers(users);
+        res.status(201).json({ id: newUser.id, email: newUser.email });
+    } catch (e) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    const users = await getUsers();
-    const user = users.find((u: any) => u.email === email && u.password === password);
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    res.json({ id: user.id, email: user.email });
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+        const users = await getUsers();
+        const user = users.find((u: any) => u.email === email);
+        if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+        // Handle old plain-text users gracefully or enforce hashed comparison
+        const isMatch = user.salt
+            ? user.password === await hashPassword(password, user.salt)
+            : user.password === password; // Temporary fallback for existing users without salt
+
+        if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
+        res.status(200).json({ id: user.id, email: user.email });
+    } catch (e) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));

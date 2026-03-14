@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Mic, MicOff, Play, Square, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Search, PlusCircle, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, Globe, Info, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
+import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -19,6 +19,18 @@ const App: React.FC = () => {
   const [feedIndex, setFeedIndex] = useState(0);
   const [closet, setCloset] = useState<any[]>([]);
   const [insights, setInsights] = useState({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
+
+  const nextItem = () => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev + 1) % styleGallery.length);
+    }
+  };
+
+  const prevItem = () => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev - 1 + styleGallery.length) % styleGallery.length);
+    }
+  };
 
   const [preferences, setPreferences] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
