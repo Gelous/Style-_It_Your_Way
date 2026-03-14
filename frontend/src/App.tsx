@@ -29,6 +29,7 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTime = useRef(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   // Load user from localStorage
@@ -37,13 +38,30 @@ const App: React.FC = () => {
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  // Initialize camera only when logged in
+  // Persistent Camera Initialization
   useEffect(() => {
     if (!user) return;
-    navigator.mediaDevices.getUserMedia({ video: true })
-      .then((stream) => { if (videoRef.current) videoRef.current.srcObject = stream; })
-      .catch((err) => console.error("Error accessing camera:", err));
-  }, [user]);
+    
+    const startCamera = async () => {
+        try {
+            if (!cameraStreamRef.current) {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                cameraStreamRef.current = stream;
+            }
+            if (activeTab === 'stylist' && videoRef.current) {
+                videoRef.current.srcObject = cameraStreamRef.current;
+            }
+        } catch (err) {
+            console.error("Error accessing camera:", err);
+        }
+    };
+
+    startCamera();
+
+    return () => {
+        // We keep it running for the AI's vision, but we could stop it on logout
+    };
+  }, [user, activeTab]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,6 +115,49 @@ const App: React.FC = () => {
   }, [user]);
 
   const disconnect = useCallback(() => { wsRef.current?.close(); }, []);
+
+  const nextItem = useCallback(() => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev + 1) % styleGallery.length);
+    }
+  }, [styleGallery.length]);
+
+  const prevItem = useCallback(() => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev - 1 + styleGallery.length) % styleGallery.length);
+    }
+  }, [styleGallery.length]);
+
+  // Send camera frames to Gemini
+  useEffect(() => {
+    if (!isConnected || !videoRef.current) return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    const interval = setInterval(() => {
+      if (videoRef.current && ctx && wsRef.current?.readyState === WebSocket.OPEN) {
+        const video = videoRef.current;
+        const size = Math.min(video.videoWidth, video.videoHeight) || 640;
+        canvas.width = size;
+        canvas.height = size;
+        
+        const startX = (video.videoWidth - size) / 2;
+        const startY = (video.videoHeight - size) / 2;
+        
+        ctx.drawImage(video, startX, startY, size, size, 0, 0, size, size);
+        const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+        
+        wsRef.current.send(JSON.stringify({
+          realtimeInput: {
+            video: { mimeType: 'image/jpeg', data: base64 }
+          }
+        }));
+      }
+    }, 500); // Send every 500ms
+
+    return () => clearInterval(interval);
+  }, [isConnected]);
 
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -280,15 +341,21 @@ const App: React.FC = () => {
         {activeTab === 'stylist' && (
           <div className="flex-1 flex gap-6 p-8 overflow-hidden relative">
             <div className="flex-1 flex flex-col gap-6 relative">
-              <div className="relative h-64 rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
-                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
+              <div className="relative h-[500px] rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
+                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] brightness-110 contrast-105" />
                 <div className={`absolute top-6 left-6 flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full text-[10px] font-bold ${isConnected ? 'text-white' : 'text-neutral-500'}`}><div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-neutral-700'}`} /> {isConnected ? 'LIVE' : 'INACTIVE'}</div>
               </div>
               
               <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex flex-col items-center justify-center p-4">
                 {styleGallery.length > 0 ? (
                   <div className="w-full h-full relative flex flex-col items-center">
-                    <img src={styleGallery[feedIndex].imageUrl} alt="Look" className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" />
+                    <img 
+                        src={styleGallery[feedIndex].imageUrl} alt="Look" 
+                        className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" 
+                        onError={(e) => {
+                            (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`;
+                        }}
+                    />
                     <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
                         <button onClick={prevItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronUp className="w-6 h-6" /></button>
                         <button onClick={nextItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronDown className="w-6 h-6" /></button>
@@ -339,17 +406,33 @@ const App: React.FC = () => {
             {selectedItem && (
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-10">
                 <div className="bg-neutral-900 border border-neutral-800 w-full max-w-4xl rounded-3xl overflow-hidden flex shadow-2xl h-[70vh] text-white">
-                  <img src={selectedItem.imageUrl} className="w-1/2 object-cover" />
+                  <img src={selectedItem.imageUrl} className="w-1/2 object-cover" onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`;
+                  }} />
                   <div className="w-1/2 p-10 flex flex-col h-full bg-neutral-900">
                     <div className="flex justify-between items-start mb-6"><div><h2 className="text-3xl font-bold mb-2">{selectedItem.name}</h2><p className="text-neutral-400 text-sm">{selectedItem.reason}</p></div><button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
-                    <div className="mt-auto"><h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4><div className="grid grid-cols-1 gap-3">{selectedItem.retailers?.map((r: string) => (<div key={r} className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"><span className="font-medium text-sm">{r}</span><ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" /></div>))}</div></div>
+                    <div className="mt-auto">
+                        <h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4>
+                        <div className="grid grid-cols-1 gap-3">
+                            {selectedItem.retailers?.map((r: string) => (
+                                <div 
+                                    key={r} 
+                                    onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(selectedItem.name + " " + r)}`, '_blank')}
+                                    className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"
+                                >
+                                    <span className="font-medium text-sm">{r}</span>
+                                    <ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
           </div>
         )}
-        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
+        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" onError={(e) => { (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`; }} /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
       </div>
     </div>
   );

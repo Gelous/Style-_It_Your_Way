@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type, Modality } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
@@ -95,7 +95,7 @@ app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));
 
 // Global AI Setup
 const ai = new GoogleGenAI({ 
-    apiKey: process.env.GOOGLE_API_KEY,
+    apiKey: process.env.GOOGLE_API_KEY!,
     httpOptions: { apiVersion: 'v1beta' }
 });
 
@@ -103,26 +103,29 @@ const SYSTEM_INSTRUCTION = `
 You are StyleSense AI, a world-class Visual Style Transition Coach.
 
 CORE RULES:
-- VISUAL FOCUS: You must provide 6 real-world style options.
+- VISION ENABLED: You can see the user through their camera feed. Constantly analyze their current outfit, posture, and surroundings.
+- VISUAL FEEDBACK: Start by describing what you see. ("I see you're wearing a navy blazer...")
+- STYLE TRANSITION: Guide the user from their current look to their "Target Aesthetic".
+- VISUAL FOCUS: You must provide 6 real-world style options using 'generate_style_batch'.
 - IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link.
 - GOOGLE SEARCH: Use search to find the latest trends and store availability.
-- ONE SUMMARY: provide a single high-level advice report.
+- INTERACTIVE: Be encouraging, observant, and proactive. If the user moves or changes something, acknowledge it.
 - PERSONALIZED: Use the specific user's Style Profile provided below.
 `;
 
 const toolsList = [
-  { googleSearch: {} },
-  {
+  { 
+    googleSearch: {},
     functionDeclarations: [
       {
         name: 'update_style_insights',
         description: 'Updates the summary report.',
         parameters: {
-          type: 'OBJECT',
+          type: Type.OBJECT,
           properties: {
-            suggestions: { type: 'STRING' },
-            improvements: { type: 'STRING' },
-            recommendations: { type: 'STRING' }
+            suggestions: { type: Type.STRING },
+            improvements: { type: Type.STRING },
+            recommendations: { type: Type.STRING }
           },
           required: ['suggestions', 'improvements', 'recommendations']
         }
@@ -131,17 +134,17 @@ const toolsList = [
         name: 'generate_style_batch',
         description: 'Generates a batch of 6 styles with verified images.',
         parameters: {
-          type: 'OBJECT',
+          type: Type.OBJECT,
           properties: {
             options: {
-              type: 'ARRAY',
+              type: Type.ARRAY,
               items: {
-                type: 'OBJECT',
+                type: Type.OBJECT,
                 properties: {
-                  name: { type: 'STRING' },
-                  reason: { type: 'STRING' },
-                  retailers: { type: 'ARRAY', items: { type: 'STRING' } },
-                  imageUrl: { type: 'STRING' }
+                  name: { type: Type.STRING },
+                  reason: { type: Type.STRING },
+                  retailers: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  imageUrl: { type: Type.STRING }
                 },
                 required: ['name', 'reason', 'retailers', 'imageUrl']
               }
@@ -154,12 +157,12 @@ const toolsList = [
         name: 'add_to_closet',
         description: 'Adds item to closet.',
         parameters: {
-          type: 'OBJECT',
+          type: Type.OBJECT,
           properties: {
-            name: { type: 'STRING' },
-            description: { type: 'STRING' },
-            imageUrl: { type: 'STRING' },
-            retailers: { type: 'ARRAY', items: { type: 'STRING' } }
+            name: { type: Type.STRING },
+            description: { type: Type.STRING },
+            imageUrl: { type: Type.STRING },
+            retailers: { type: Type.ARRAY, items: { type: Type.STRING } }
           },
           required: ['name', 'description', 'imageUrl', 'retailers']
         }
@@ -219,8 +222,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
       config: {
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
         tools: toolsList,
-        generationConfig: { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } } },
-        responseModalities: ['AUDIO']
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+        responseModalities: [Modality.AUDIO]
       },
       callbacks: {
         onopen: () => {
@@ -272,17 +275,28 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
-        for (const chunk of data.realtimeInput.mediaChunks) {
-            if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: { data: chunk.data, mimeType: chunk.mimeType } });
-            else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
+        if (data.realtimeInput.audio) {
+            session.sendRealtimeInput({ audio: data.realtimeInput.audio });
+        } else if (data.realtimeInput.video) {
+            session.sendRealtimeInput({ video: data.realtimeInput.video });
+        } else if (data.realtimeInput.mediaChunks) {
+            for (const chunk of data.realtimeInput.mediaChunks) {
+                if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: chunk });
+                else session.sendRealtimeInput({ video: chunk });
+            }
         }
       } else if (data.text) {
         // Special case: Update Goal command
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
+            session.sendClientContent({ 
+                turns: [{ role: 'user', parts: [{ text: `SYSTEM NOTE: My Target Aesthetic has been updated to: "${myPreferences}". Please acknowledge and adjust your advice.` }] }], 
+                turnComplete: true 
+            });
+        } else {
+            session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true });
         }
-        session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true });
       }
     } catch (e) { console.error('WS Message Error:', e); }
   });
