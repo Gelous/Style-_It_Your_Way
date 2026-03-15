@@ -272,12 +272,12 @@ wss.on('connection', async (ws: WebSocket, request) => {
 
   try {
     session = await ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-latest',
+      model: 'gemini-2.0-flash-exp',
       config: {
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + "\n\n" + contextPrompt }] },
         tools: toolsList,
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-        responseModalities: [Modality.AUDIO]
+        responseModalities: ['audio']
       },
       callbacks: {
         onopen: () => {
@@ -293,12 +293,14 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
               if (part.inlineData) ws.send(JSON.stringify({ audio: part.inlineData.data }));
             }
           }
+
           if (message.toolCall) {
             const functionResponses = [];
             for (const call of (message.toolCall.functionCalls || [])) {
@@ -321,7 +323,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
         }
       }
     });
-  } catch (err) { ws.close(); return; }
+  } catch (err) { console.error("Failed to connect:", err); ws.close(); return; }
 
   ws.on('message', async (message: string) => {
     try {
