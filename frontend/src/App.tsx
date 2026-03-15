@@ -32,7 +32,7 @@ const App: React.FC = () => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTime = useRef(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   // Load user from localStorage
@@ -41,31 +41,26 @@ const App: React.FC = () => {
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  // Persistent Camera Stream acquisition
+  // Acquire Camera Stream
   useEffect(() => {
     if (!user) return;
     const getStream = async () => {
         try {
-            if (!cameraStreamRef.current) {
+            if (!cameraStream) {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                cameraStreamRef.current = stream;
+                setCameraStream(stream);
             }
         } catch (err) { console.error("Error acquiring camera stream:", err); }
     };
     getStream();
-  }, [user]);
+  }, [user, cameraStream]);
 
-  // Re-attach stream to video element whenever 'stylist' tab is active
+  // Re-attach stream to video element
   useEffect(() => {
-    if (activeTab === 'stylist' && cameraStreamRef.current) {
-        const timer = setTimeout(() => {
-            if (videoRef.current) {
-                videoRef.current.srcObject = cameraStreamRef.current;
-            }
-        }, 100);
-        return () => clearTimeout(timer);
+    if (activeTab === 'stylist' && cameraStream && videoRef.current) {
+        videoRef.current.srcObject = cameraStream;
     }
-  }, [activeTab]);
+  }, [activeTab, cameraStream]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
