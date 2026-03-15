@@ -38,30 +38,31 @@ const App: React.FC = () => {
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  // Persistent Camera Initialization
+  // Persistent Camera Stream acquisition
   useEffect(() => {
     if (!user) return;
-    
-    const startCamera = async () => {
+    const getStream = async () => {
         try {
             if (!cameraStreamRef.current) {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 cameraStreamRef.current = stream;
             }
-            if (activeTab === 'stylist' && videoRef.current) {
+        } catch (err) { console.error("Error acquiring camera stream:", err); }
+    };
+    getStream();
+  }, [user]);
+
+  // Re-attach stream to video element whenever 'stylist' tab is active
+  useEffect(() => {
+    if (activeTab === 'stylist' && cameraStreamRef.current) {
+        const timer = setTimeout(() => {
+            if (videoRef.current) {
                 videoRef.current.srcObject = cameraStreamRef.current;
             }
-        } catch (err) {
-            console.error("Error accessing camera:", err);
-        }
-    };
-
-    startCamera();
-
-    return () => {
-        // We keep it running for the AI's vision, but we could stop it on logout
-    };
-  }, [user, activeTab]);
+        }, 100);
+        return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -194,7 +195,7 @@ const App: React.FC = () => {
     }, 1000); // Send every 1000ms (more stable)
 
     return () => clearInterval(interval);
-  }, [isConnected]);
+  }, [isConnected, activeTab]);
 
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
