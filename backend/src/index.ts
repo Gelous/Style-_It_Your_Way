@@ -110,7 +110,7 @@ async function hashPassword(password: string, salt: string) {
 // Auth Endpoints
 app.post('/api/signup', async (req, res) => {
     try {
-        const { email, password, sex } = req.body;
+        const { email, password, name, sex, basicPreferences } = req.body;
         if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
         const users = await getUsers();
@@ -118,10 +118,10 @@ app.post('/api/signup', async (req, res) => {
 
         const salt = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await hashPassword(password, salt);
-        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, sex: sex || 'unspecified' };
+        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, name: name || '', sex: sex || 'unspecified', basicPreferences: basicPreferences || '' };
         users.push(newUser);
         await saveUsers(users);
-        res.status(201).json({ id: newUser.id, email: newUser.email, sex: newUser.sex });
+        res.status(201).json({ id: newUser.id, email: newUser.email, name: newUser.name, sex: newUser.sex, basicPreferences: newUser.basicPreferences });
     } catch (e) {
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -142,7 +142,7 @@ app.post('/api/login', async (req, res) => {
             : user.password === password; // Temporary fallback for existing users without salt
 
         if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
-        res.status(200).json({ id: user.id, email: user.email, sex: user.sex || 'unspecified' });
+        res.status(200).json({ id: user.id, email: user.email, name: user.name || '', sex: user.sex || 'unspecified', basicPreferences: user.basicPreferences || '' });
     } catch (e) {
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -163,7 +163,7 @@ CORE RULES:
 - VISUAL FOCUS: You must generate real-world style options. If the user asks for a gallery or more items, call 'generate_style_batch' with 5 to 10 items.
 - IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link that you find via Google Search. Do not use example.com links or placeholder links. The generated image and the 'Shop' description must match perfectly. Find a real product image online.
 - GOOGLE SEARCH: Use search to find the latest trends, exact store availability, and real image URLs from Google Shopping, retailers, or fashion blogs.
-- ONE SUMMARY: provide a single high-level advice report.
+- ONE SUMMARY: When updating style insights, keep the "improvements" string EXTREMELY SHORT (1 or 2 sentences max) to fit cleanly in the UI. Speak aloud if you need to say more.
 - PERSONALIZED: Use the specific user's Style Profile and demographics provided below to tailor all suggestions specifically to them (e.g. if they are male, ONLY suggest men's clothing).
 `;
 
@@ -245,7 +245,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
   // Find User Demographic
   const users = await getUsers();
   const user = users.find((u: any) => u.id === userId);
+  const userName = user?.name || '';
   const userSex = user?.sex || 'unspecified';
+  const userBasicPreferences = user?.basicPreferences || '';
 
   ws.send(JSON.stringify({ toolCallResult: { name: 'get_closet', result: { items: myCloset } } }));
 
@@ -279,10 +281,16 @@ wss.on('connection', async (ws: WebSocket, request) => {
   };
 
   try {
+    const contextPrompt =
+      (userName ? `\n\nUSER NAME: ${userName}` : "") +
+      (userSex !== 'unspecified' ? `\n\nUSER SEX/GENDER: ${userSex}` : "") +
+      (userBasicPreferences ? `\n\nUSER BASIC PREFERENCES: ${userBasicPreferences}` : "") +
+      (myPreferences ? `\n\nCURRENT SESSION STYLE TARGET: ${myPreferences}` : "");
+
     session = await ai.live.connect({
       model: 'gemini-2.0-flash-exp',
       config: {
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (userSex !== 'unspecified' ? `\n\nUSER SEX/GENDER: ${userSex}` : "") + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
+        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + contextPrompt }] },
         tools: toolsList
       },
       callbacks: {

@@ -2,16 +2,19 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<{ id: string; email: string; sex: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email: string; name: string; sex: string; basicPreferences: string } | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
   const [authSex, setAuthSex] = useState('unspecified');
+  const [authBasicPreferences, setAuthBasicPreferences] = useState('');
   const [authError, setAuthError] = useState('');
 
   const [activeTab, setActiveTab] = useState('stylist');
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
   
@@ -81,7 +84,7 @@ const App: React.FC = () => {
     const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
     try {
         const payload = authMode === 'signup'
-          ? { email: authEmail, password: authPassword, sex: authSex }
+          ? { email: authEmail, password: authPassword, name: authName, sex: authSex, basicPreferences: authBasicPreferences }
           : { email: authEmail, password: authPassword };
 
         const res = await fetch(`http://localhost:3001${endpoint}`, {
@@ -130,6 +133,7 @@ const App: React.FC = () => {
     };
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = async (event) => {
+      setIsProcessing(false); // AI responded, hide processing indicator
       const data = JSON.parse(event.data);
       if (data.audio) playAudioChunk(data.audio);
       if (data.toolCallResult) {
@@ -167,6 +171,7 @@ const App: React.FC = () => {
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       interruptAI();
+      setIsProcessing(true);
       wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery with 6 new suggestions." }));
     }
   };
@@ -174,6 +179,7 @@ const App: React.FC = () => {
   const handleLike = (item: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       interruptAI();
+      setIsProcessing(true);
       wsRef.current.send(JSON.stringify({ text: `I love the "${item.name}" suggestion. Add it to my closet.` }));
     }
   };
@@ -247,11 +253,13 @@ const App: React.FC = () => {
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
     if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
     setIsRecording(false);
+    setIsProcessing(true); // After user finishes recording, expect processing
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'inspiration' | 'current_look') => {
     const file = e.target.files?.[0];
     if (file && wsRef.current?.readyState === WebSocket.OPEN) {
+      setIsProcessing(true);
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = (reader.result as string).split(',')[1];
@@ -278,6 +286,16 @@ const App: React.FC = () => {
           </div>
 
           <form onSubmit={handleAuth} className="space-y-4">
+            {authMode === 'signup' && (
+              <div className="relative group">
+                <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                <input
+                  type="text" required placeholder="Full Name"
+                  value={authName} onChange={(e) => setAuthName(e.target.value)}
+                  className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm"
+                />
+              </div>
+            )}
             <div className="relative group">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
               <input 
@@ -296,18 +314,28 @@ const App: React.FC = () => {
             </div>
             
             {authMode === 'signup' && (
-              <div className="relative group">
-                <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
-                <select
-                  value={authSex} onChange={(e) => setAuthSex(e.target.value)}
-                  className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm text-neutral-400 appearance-none"
-                >
-                  <option value="unspecified">Prefer not to say</option>
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="non-binary">Non-binary</option>
-                </select>
-              </div>
+              <>
+                <div className="relative group">
+                  <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                  <select
+                    value={authSex} onChange={(e) => setAuthSex(e.target.value)}
+                    className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm text-neutral-400 appearance-none"
+                  >
+                    <option value="unspecified">Prefer not to say</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="non-binary">Non-binary</option>
+                  </select>
+                </div>
+                <div className="relative group">
+                  <Shirt className="absolute left-4 top-4 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                  <textarea
+                    placeholder="Basic Preferences (e.g. I only wear black, I love oversized fits, no synthetic fabrics)"
+                    value={authBasicPreferences} onChange={(e) => setAuthBasicPreferences(e.target.value)}
+                    className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm resize-none h-24"
+                  />
+                </div>
+              </>
             )}
 
             {authError && <p className="text-red-500 text-xs text-center font-medium bg-red-500/10 py-2 rounded-lg">{authError}</p>}
@@ -341,10 +369,10 @@ const App: React.FC = () => {
           <button onClick={handleLogout} className="p-2 hover:bg-neutral-800 rounded-lg text-neutral-500 hover:text-red-400 transition" title="Logout"><LogOut className="w-5 h-5" /></button>
         </div>
         <div className="flex items-center gap-3 p-4 bg-neutral-900/50 border border-neutral-800 rounded-2xl">
-            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-sm font-bold">{user.email[0].toUpperCase()}</div>
+            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-sm font-bold">{user.name ? user.name[0].toUpperCase() : user.email[0].toUpperCase()}</div>
             <div className="overflow-hidden">
                 <p className="text-[10px] text-neutral-500 uppercase font-bold tracking-widest">Logged In As</p>
-                <p className="text-xs font-medium truncate">{user.email}</p>
+                <p className="text-xs font-medium truncate">{user.name || user.email}</p>
             </div>
         </div>
         <nav className="flex flex-col gap-2">
@@ -408,7 +436,10 @@ const App: React.FC = () => {
 
             <div className="w-96 flex flex-col gap-6">
               <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
-                <h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice Summary</h3>
+                <h3 className="font-bold flex items-center justify-between mb-4 text-neutral-900">
+                  <div className="flex items-center gap-2"><Shirt className="w-4 h-4" /> Advice Summary</div>
+                  {isProcessing && <div className="flex gap-1 items-center"><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.3s]"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.5s]"></div></div>}
+                </h3>
                 <div className="flex flex-col gap-3 text-sm">
                   <p className="font-medium leading-relaxed">{insights.improvements || 'Coach is analyzing your style and speaking aloud...'}</p>
                   <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
