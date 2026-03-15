@@ -437,7 +437,13 @@ const App: React.FC = () => {
               <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
                 <h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice Summary</h3>
                 <div className="flex flex-col gap-3 text-sm">
-                  <p className="font-medium leading-relaxed">{insights.improvements || 'Coach is watching your feed...'}</p>
+                  <p className="font-medium leading-relaxed">{insights.summary || 'Coach is watching your feed...'}</p>
+                  {insights.top_tip && (
+                    <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex gap-2">
+                        <Sparkles className="w-4 h-4 text-purple-500 shrink-0" />
+                        <p className="text-[11px] text-purple-900 font-bold leading-tight">{insights.top_tip}</p>
+                    </div>
+                  )}
                   <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
                 </div>
               </div>
@@ -451,9 +457,9 @@ const App: React.FC = () => {
                 <div className="bg-neutral-900 border border-neutral-800 w-full max-w-2xl rounded-3xl p-8 flex flex-col max-h-[80vh] shadow-2xl text-white">
                   <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-3"><FileText className="text-purple-500" /> Style Report</h2><button onClick={() => setShowReport(false)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
                   <div className="flex-1 overflow-y-auto space-y-6 text-neutral-300 pr-4 custom-scrollbar">
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Analysis</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.suggestions}</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Detailed Roadmap</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-white font-medium">{insights.improvements}</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Retailers</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.recommendations}</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Executive Summary</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.summary}</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Pro Tip</h4><p className="leading-relaxed bg-purple-900/20 p-4 rounded-2xl border border-purple-500/30 text-white font-medium italic">"{insights.top_tip}"</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Full Coaching Advice</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-sm whitespace-pre-wrap">{insights.vocal_script}</p></section>
                   </div>
                 </div>
               </div>

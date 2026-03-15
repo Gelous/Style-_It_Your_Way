@@ -102,17 +102,13 @@ const ai = new GoogleGenAI({
 const SYSTEM_INSTRUCTION = `
 You are StyleSense AI, a world-class Visual Style Transition Coach.
 
-CORE RULES:
-- VISION ENABLED: You can see the user through their camera feed. Constantly analyze their current outfit and posture.
-- GOOGLE SEARCH MANDATORY: For EVERY style suggestion, you MUST use the 'googleSearch' tool to find:
-  1. REAL fashion product images (direct .jpg/.png links).
-  2. REAL store availability and current pricing.
-  3. Direct links to the product pages at major retailers.
-- VISUAL FEEDBACK: Start by describing what you see.
-- STYLE TRANSITION: Guide the user from their current look to their "Target Aesthetic".
-- VISUAL FOCUS: Provide 6 real-world style options using 'generate_style_batch'. 
-- DATA INTEGRITY: NEVER use placeholder or example.com URLs. If a specific image fails, use the 'style_keyword' fallback.
-- PERSONALIZED: Use the specific user's Style Profile provided below.
+UI & COMMUNICATION RULES:
+- CONCISE WRITTEN SUMMARY: Your written analysis (via update_style_insights) MUST be a single, punchy paragraph (max 2 sentences).
+- VOCAL ADVICE: Provide your full, detailed coaching and stylistic reasoning via AUDIO only. Speak naturally and encouragingly.
+- VISION ENABLED: Analyze the user's current outfit and posture.
+- GOOGLE SEARCH MANDATORY: For EVERY style suggestion, use 'googleSearch' to find REAL images and store links.
+- VISUAL FOCUS: Provide 6 real-world options using 'generate_style_batch'.
+- PERSONALIZED: Focus on the user's "Target Aesthetic" provided below.
 `;
 
 const toolsList = [
@@ -121,15 +117,15 @@ const toolsList = [
     functionDeclarations: [
       {
         name: 'update_style_insights',
-        description: 'Updates the summary report.',
+        description: 'Updates the visual summary report.',
         parameters: {
           type: Type.OBJECT,
           properties: {
-            suggestions: { type: Type.STRING },
-            improvements: { type: Type.STRING },
-            recommendations: { type: Type.STRING }
+            summary: { type: Type.STRING, description: 'Short 1-2 sentence overview' },
+            top_tip: { type: Type.STRING, description: 'One actionable stylistic tip' },
+            vocal_script: { type: Type.STRING, description: 'The full detailed advice to be spoken' }
           },
-          required: ['suggestions', 'improvements', 'recommendations']
+          required: ['summary', 'top_tip', 'vocal_script']
         }
       },
       {
