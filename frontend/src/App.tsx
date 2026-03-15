@@ -83,15 +83,29 @@ const App: React.FC = () => {
     localStorage.removeItem('styleSenseUser');
   };
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!user) return;
+
+    // Create AudioContext on a user gesture to satisfy browser policies (Chrome/Firefox/Safari)
+    try {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        }
+        if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+        }
+    } catch(e) {
+        console.error("Failed to initialize audio context", e);
+    }
+
     const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
     wsRef.current = ws;
     ws.onopen = () => {
       setIsConnected(true);
       setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      nextStartTime.current = audioContextRef.current.currentTime;
+      if (audioContextRef.current) {
+          nextStartTime.current = audioContextRef.current.currentTime;
+      }
     };
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = async (event) => {
@@ -145,9 +159,15 @@ const App: React.FC = () => {
 
   const startRecording = async () => {
     try {
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 16000 });
-      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+      // Re-use or create audio context
+      if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      }
+      if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } });
       mediaStreamRef.current = stream;
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
@@ -170,7 +190,7 @@ const App: React.FC = () => {
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
       setIsRecording(true);
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error("Error accessing microphone:", err); }
   };
 
   const stopRecording = () => {
@@ -362,6 +382,34 @@ const App: React.FC = () => {
           </div>
         )}
         {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
+        {activeTab === 'trends' && (
+          <div className="flex-1 p-8 overflow-y-auto text-white">
+            <h2 className="text-3xl font-bold mb-8 flex items-center gap-3"><TrendingUp className="text-purple-500" /> Global Style Trends</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[
+                { title: 'Y2K Revival', desc: 'Low-rise jeans, baby tees, and metallic accessories are dominating street style this season.', tags: ['Vintage', 'Streetwear'] },
+                { title: 'Quiet Luxury', desc: 'Elevated basics, neutral tones, and focus on high-quality fabrics without visible logos.', tags: ['Minimalist', 'Elegant'] },
+                { title: 'Gorpcore', desc: 'Functional outdoor gear worn as everyday fashion. Think cargo pants and technical jackets.', tags: ['Utility', 'Casual'] },
+                { title: 'Corporate Core', desc: 'Oversized blazers, tailored trousers, and loafers mixed with casual elements.', tags: ['Office', 'Chic'] },
+                { title: 'Balletcore', desc: 'Wrap tops, leg warmers, tulle skirts, and ballet flats bringing soft feminine energy.', tags: ['Feminine', 'Soft'] },
+                { title: 'Eclectic Grandpa', desc: 'Sweater vests, colorful cardigans, and retro sneakers paired playfully.', tags: ['Retro', 'Comfort'] }
+              ].map((trend, i) => (
+                <div key={i} className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 hover:border-purple-500 transition cursor-pointer group shadow-xl">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition">{trend.title}</h3>
+                    <Sparkles className="w-5 h-5 text-neutral-600 group-hover:text-purple-500 transition" />
+                  </div>
+                  <p className="text-neutral-400 text-sm mb-6 leading-relaxed">{trend.desc}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {trend.tags.map(tag => (
+                      <span key={tag} className="text-[10px] uppercase tracking-widest font-bold px-3 py-1 bg-neutral-800 text-neutral-300 rounded-full border border-neutral-700">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

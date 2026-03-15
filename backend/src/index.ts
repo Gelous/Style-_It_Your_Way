@@ -161,8 +161,8 @@ You are StyleSense AI, a world-class Visual Style Transition Coach.
 
 CORE RULES:
 - VISUAL FOCUS: You must provide 6 real-world style options.
-- IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link.
-- GOOGLE SEARCH: Use search to find the latest trends and store availability.
+- IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link that you find via Google Search. Do not use example.com links or placeholder links. The generated image and the 'Shop' description must match perfectly. Find a real product image online.
+- GOOGLE SEARCH: Use search to find the latest trends, exact store availability, and real image URLs (e.g. from retailers, Pinterest, Instagram public posts, or fashion blogs).
 - ONE SUMMARY: provide a single high-level advice report.
 - PERSONALIZED: Use the specific user's Style Profile provided below.
 `;
@@ -250,13 +250,16 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
-        const suggestions = args.options.map((opt: any, i: number) => {
+        // Return exactly what the AI generated, trusting it to provide valid image URLs from Google Search.
+        // If the AI fails to find an image, we still want to show what it *thought* it found, rather than
+        // hardcoding static Unsplash placeholders that cause a mismatch between visual and description.
+        const suggestions = args.options.map((opt: any) => {
+            // As a last-resort fallback to prevent broken images entirely if AI really hallucinates a bad URL:
             let finalUrl = opt.imageUrl;
-            if (!finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15) {
-                finalUrl = `https://images.unsplash.com/photo-${[
-                    '1515886657613-9f3515b0c78f', '1434389677669-e08b4cac3105', '1591047139829-d91aecb6caea',
-                    '1552374196-1ab2a1c593e8', '1594938298603-c8148c4dae35', '1539109136881-3be0616bc469'
-                ][i % 6]}?q=80&w=800&auto=format`;
+            if (!finalUrl || finalUrl.includes('example.com') || !finalUrl.startsWith('http')) {
+                // We use a generic placeholder service that echoes back the description text as an image,
+                // so the user knows what should be there, rather than a completely unrelated fashion image.
+                finalUrl = `https://placehold.co/600x800/222222/FFFFFF/png?text=${encodeURIComponent(opt.name)}`;
             }
             return { ...opt, imageUrl: finalUrl };
         });
@@ -272,7 +275,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
 
   try {
     session = await ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-latest',
+      model: 'models/gemini-2.0-flash-exp',
       config: {
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
         tools: toolsList,
