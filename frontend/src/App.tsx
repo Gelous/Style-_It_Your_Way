@@ -1,9 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-<<<<<<< HEAD
-import { Camera, Mic, MicOff, Play, Square, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Search, PlusCircle, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, Globe, Info, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
-=======
 import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
 
 const App: React.FC = () => {
   const [user, setUser] = useState<{ id: string; email: string; name?: string; sex?: string; basicPreferences?: string } | null>(null);
@@ -12,10 +8,6 @@ const App: React.FC = () => {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authSex, setAuthSex] = useState('unspecified');
-<<<<<<< HEAD
-  const [authBasicPrefs, setAuthBasicPrefs] = useState('');
-=======
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
   const [authError, setAuthError] = useState('');
 
   const [activeTab, setActiveTab] = useState('stylist');
@@ -73,11 +65,10 @@ const App: React.FC = () => {
     e.preventDefault();
     setAuthError('');
     const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
-<<<<<<< HEAD
     const body = authMode === 'login'
-=======
+    const body = authMode === 'login' 
     const body = authMode === 'login'
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
+origin/fix/security-and-robustness-2686056288197952117
         ? { email: authEmail, password: authPassword }
         : { email: authEmail, password: authPassword, name: authName, sex: authSex, basicPreferences: authBasicPrefs };
 

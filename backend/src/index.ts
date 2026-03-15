@@ -291,8 +291,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
             setTimeout(() => {
                 if (session) {
                     session.sendClientContent({ 
-                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }],
-                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }],
+                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }], 
+                      main
                         turnComplete: true 
                     });
                 }
@@ -300,8 +300,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-
-
+          main
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
@@ -337,8 +336,6 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
-        if (data.realtimeInput.audio) session.sendRealtimeInput({ audio: data.realtimeInput.audio });
-        else if (data.realtimeInput.video) session.sendRealtimeInput({ video: data.realtimeInput.video });
         // Fallback to original working format or whatever frontend sends
         if (data.realtimeInput.mediaChunks) {
             for (const chunk of data.realtimeInput.mediaChunks) {
@@ -346,6 +343,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
                 else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
             }
         }
+origin/fix/security-and-robustness-2686056288197952117
       } else if (data.text) {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
