@@ -125,6 +125,11 @@ const App: React.FC = () => {
       setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
       if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 24000 });
       nextStartTime.current = audioContextRef.current.currentTime;
+      
+      // Explicitly ask for real-world grounding using Google Search
+      ws.send(JSON.stringify({ 
+        text: "Coach, please use Google Search to find 6 real-world style options for my Target Goal. For each, find a REAL image URL and a direct shop link, then call generate_style_batch." 
+      }));
     };
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = (event) => {
