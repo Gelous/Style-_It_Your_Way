@@ -53,6 +53,7 @@ const App: React.FC = () => {
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const nextStartTime = useRef(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   // Load user from localStorage
@@ -61,7 +62,7 @@ const App: React.FC = () => {
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
-  // Initialize camera only when logged in
+  // Persistent Camera Stream acquisition
   useEffect(() => {
     if (!user) return;
     if (cameraStream) return;
@@ -77,6 +78,18 @@ const App: React.FC = () => {
       videoRef.current.srcObject = cameraStream;
     }
   }, [activeTab, cameraStream]);
+
+  // Re-attach stream to video element whenever 'stylist' tab is active
+  useEffect(() => {
+    if (activeTab === 'stylist' && cameraStreamRef.current) {
+        const timer = setTimeout(() => {
+            if (videoRef.current) {
+                videoRef.current.srcObject = cameraStreamRef.current;
+            }
+        }, 100);
+        return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,6 +151,7 @@ const App: React.FC = () => {
       if (data.audio) playAudioChunk(data.audio);
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
+        console.log(`DEBUG: Tool Result [${name}]:`, result);
         if (name === 'update_style_insights') setInsights(result);
         if (name === 'generate_style_batch') {
             setStyleGallery(prev => {
@@ -168,12 +182,61 @@ const App: React.FC = () => {
 
   const disconnect = useCallback(() => { wsRef.current?.close(); interruptAI(); }, [interruptAI]);
 
+  const nextItem = useCallback(() => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev + 1) % styleGallery.length);
+    }
+  }, [styleGallery.length]);
+
+  const prevItem = useCallback(() => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev - 1 + styleGallery.length) % styleGallery.length);
+    }
+  }, [styleGallery.length]);
+
+  // Send camera frames to Gemini
+  useEffect(() => {
+    if (!isConnected || !videoRef.current) return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    const interval = setInterval(() => {
+      if (videoRef.current && ctx && wsRef.current?.readyState === WebSocket.OPEN) {
+        const video = videoRef.current;
+        // Use full video dimensions to avoid cropping
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+        
+        wsRef.current.send(JSON.stringify({
+          realtimeInput: {
+            video: { mimeType: 'image/jpeg', data: base64 }
+          }
+        }));
+      }
+    }, 1000); // Send every 1000ms (more stable)
+
+    return () => clearInterval(interval);
+  }, [isConnected, activeTab]);
+
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       interruptAI();
       setIsProcessing(true);
       wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery with 6 new suggestions." }));
     }
+  };
+
+  const clearSession = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ text: "CLEAR CONTEXT: Forget our previous conversation and start fresh with my current Target Aesthetic." }));
+    }
+    setMessages([]);
+    setStyleGallery([]);
+    setInsights({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
   };
 
   const handleLike = (item: any) => {
@@ -391,6 +454,7 @@ const App: React.FC = () => {
           <div className="grid grid-cols-2 gap-2">
             {!isConnected ? <button onClick={connect} className="col-span-2 bg-white text-black py-3 rounded-xl font-bold hover:bg-neutral-200 transition">START</button> : <button onClick={() => wsRef.current?.close()} className="col-span-2 bg-red-500/10 text-red-500 border border-red-500/20 py-3 rounded-xl font-bold">STOP</button>}
             <button onClick={analyzeNow} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-purple-600/20 text-purple-400 border border-purple-500/20 hover:bg-purple-600/30'}`}><RefreshCw className={`w-4 h-4 ${isConnected ? 'animate-spin-slow' : ''}`} /><span className="text-xs font-bold uppercase">Analyze My Look</span></button>
+            <button onClick={clearSession} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'}`}><X className="w-4 h-4" /><span className="text-xs font-bold uppercase">Clear Chat</span></button>
             <input type="file" ref={inspirationInputRef} onChange={(e) => handleFileUpload(e, 'inspiration')} accept="image/*" className="hidden" />
             <button onClick={() => inspirationInputRef.current?.click()} disabled={!isConnected} className={`p-3 rounded-xl transition flex flex-col items-center gap-1 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-neutral-800 text-purple-400 hover:bg-neutral-700'}`}><ImageIcon className="w-5 h-5" /><span className="text-[10px] font-bold uppercase">Inspo</span></button>
             <input type="file" ref={currentLookInputRef} onChange={(e) => handleFileUpload(e, 'current_look')} accept="image/*" className="hidden" />
@@ -404,27 +468,53 @@ const App: React.FC = () => {
         {activeTab === 'stylist' && (
           <div className="flex-1 flex gap-6 p-8 overflow-hidden relative">
             <div className="flex-1 flex flex-col gap-6 relative">
-              <div className="relative h-64 rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
-                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
+              <div className="relative h-[500px] rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
+                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain transform scale-x-[-1]" />
                 <div className={`absolute top-6 left-6 flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full text-[10px] font-bold ${isConnected ? 'text-white' : 'text-neutral-500'}`}><div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-neutral-700'}`} /> {isConnected ? 'LIVE' : 'INACTIVE'}</div>
               </div>
               
-              <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex flex-col items-center justify-center p-4">
+              <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex items-center justify-center p-4">
                 {styleGallery.length > 0 ? (
-                  <div className="w-full h-full relative flex flex-col items-center">
-                    <img src={styleGallery[feedIndex].imageUrl} alt="Look" className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" />
+                  <div className="w-full h-full relative">
+                    <img 
+                        src={styleGallery[feedIndex].imageUrl} alt="Style Suggestion" 
+                        className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" 
+                        onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            const currentSrc = target.src;
+                            
+                            // 1. If original failed, try Pollinations AI
+                            if (!currentSrc.includes('pollinations.ai')) {
+                                const keyword = encodeURIComponent(`${styleGallery[feedIndex].style_keyword || styleGallery[feedIndex].name || 'fashion'} high quality editorial`);
+                                target.src = `https://image.pollinations.ai/prompt/${keyword}?width=800&height=1000&nologo=true&seed=${Date.now()}`;
+                            } 
+                            // 2. If Pollinations failed too (or we already tried it), use a reliable Unsplash fashion ID
+                            else {
+                                const fashionFallbacks = ['1515886657613-9f3515b0c78f', '1434389677669-e08b4cac3105', '1591047139829-d91aecb6caea'];
+                                const randomId = fashionFallbacks[Math.floor(Math.random() * fashionFallbacks.length)];
+                                target.src = `https://images.unsplash.com/photo-${randomId}?q=80&w=800&auto=format&fit=crop`;
+                            }
+                        }}
+                    />
                     <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
                         <button onClick={prevItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronUp className="w-6 h-6" /></button>
                         <button onClick={nextItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronDown className="w-6 h-6" /></button>
                     </div>
                     <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between bg-gradient-to-t from-black/80 to-transparent p-6 rounded-b-2xl">
-                        <div className="max-w-[70%]">
+                        <div className="max-w-[60%]">
                             <h4 className="text-xl font-bold text-white mb-1">{styleGallery[feedIndex].name}</h4>
                             <p className="text-xs text-neutral-300 line-clamp-2">{styleGallery[feedIndex].reason}</p>
                         </div>
-                        <div className="flex gap-3">
-                            <button onClick={() => handleLike(styleGallery[feedIndex])} className="p-4 bg-white rounded-full hover:scale-110 transition shadow-xl"><Heart className="w-6 h-6 text-pink-500 fill-current" /></button>
-                            <button onClick={() => setSelectedItem(styleGallery[feedIndex])} className="p-4 bg-purple-600 rounded-full hover:scale-110 transition shadow-xl"><Store className="w-6 h-6 text-white" /></button>
+                        <div className="flex gap-2">
+                            <button onClick={() => handleLike(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-pink-500/20 transition group border border-white/10"><Heart className="w-5 h-5 text-white group-hover:text-pink-500 transition" /></button>
+                            <button 
+                                onClick={() => window.open(styleGallery[feedIndex].shop_url, '_blank')}
+                                className="px-4 py-3 bg-purple-600 text-white rounded-2xl hover:bg-purple-500 transition shadow-xl flex items-center gap-2 border border-purple-400/20"
+                            >
+                                <ShoppingBag className="w-5 h-5" />
+                                <span className="text-[10px] font-bold uppercase tracking-widest">Shop</span>
+                            </button>
+                            <button onClick={() => setSelectedItem(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-white/20 transition border border-white/10"><Store className="w-5 h-5 text-white" /></button>
                         </div>
                     </div>
                   </div>
@@ -452,9 +542,9 @@ const App: React.FC = () => {
                 <div className="bg-neutral-900 border border-neutral-800 w-full max-w-2xl rounded-3xl p-8 flex flex-col max-h-[80vh] shadow-2xl text-white">
                   <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-3"><FileText className="text-purple-500" /> Style Report</h2><button onClick={() => setShowReport(false)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
                   <div className="flex-1 overflow-y-auto space-y-6 text-neutral-300 pr-4 custom-scrollbar">
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Analysis</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.suggestions}</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Detailed Roadmap</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-white font-medium">{insights.improvements}</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Retailers</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.recommendations}</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Executive Summary</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.summary}</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Pro Tip</h4><p className="leading-relaxed bg-purple-900/20 p-4 rounded-2xl border border-purple-500/30 text-white font-medium italic">"{insights.top_tip}"</p></section>
+                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Full Coaching Advice</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-sm whitespace-pre-wrap">{insights.vocal_script}</p></section>
                   </div>
                 </div>
               </div>
@@ -463,10 +553,32 @@ const App: React.FC = () => {
             {selectedItem && (
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-10">
                 <div className="bg-neutral-900 border border-neutral-800 w-full max-w-4xl rounded-3xl overflow-hidden flex shadow-2xl h-[70vh] text-white">
-                  <img src={selectedItem.imageUrl} className="w-1/2 object-cover" />
+                  <img src={selectedItem.imageUrl} className="w-1/2 object-cover" onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      if (!target.src.includes('pollinations.ai')) {
+                        const keyword = encodeURIComponent(`${selectedItem.style_keyword || selectedItem.name || 'fashion'} fashion editorial`);
+                        target.src = `https://image.pollinations.ai/prompt/${keyword}?width=800&height=1000&nologo=true&seed=${Date.now()}`;
+                      } else {
+                        target.src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop`;
+                      }
+                  }} />
                   <div className="w-1/2 p-10 flex flex-col h-full bg-neutral-900">
                     <div className="flex justify-between items-start mb-6"><div><h2 className="text-3xl font-bold mb-2">{selectedItem.name}</h2><p className="text-neutral-400 text-sm">{selectedItem.reason}</p></div><button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
-                    <div className="mt-auto"><h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4><div className="grid grid-cols-1 gap-3">{selectedItem.retailers?.map((r: string) => (<div key={r} className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"><span className="font-medium text-sm">{r}</span><ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" /></div>))}</div></div>
+                    <div className="mt-auto">
+                        <h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4>
+                        <div className="grid grid-cols-1 gap-3">
+                            {selectedItem.retailers?.map((r: string) => (
+                                <div 
+                                    key={r} 
+                                    onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(selectedItem.name + " " + r)}`, '_blank')}
+                                    className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"
+                                >
+                                    <span className="font-medium text-sm">{r}</span>
+                                    <ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                   </div>
                 </div>
               </div>
