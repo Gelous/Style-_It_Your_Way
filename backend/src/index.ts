@@ -210,8 +210,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
             console.log(`  [Sugg ${i}] name: ${opt.name}, keyword: ${opt.style_keyword}, original_url: ${finalUrl}, isPlaceholder: ${isPlaceholder}`);
 
             if (isPlaceholder) {
-                finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Math.floor(Math.random() * 1000000)}`;
-                console.log(`  [Sugg ${i}] Using Fallback URL: ${finalUrl}`);
+                // Use Pollinations.ai for high-quality, prompt-matched fashion images.
+                // This ensures that "classic business" actually shows a business look.
+                const prompt = encodeURIComponent(`${opt.style_keyword || opt.name} fashion editorial professional photography high resolution`);
+                finalUrl = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=1000&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+                console.log(`  [Sugg ${i}] Using AI-Generated Fallback: ${finalUrl}`);
             }
             return { ...opt, imageUrl: finalUrl };
         }));
