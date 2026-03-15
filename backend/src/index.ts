@@ -251,28 +251,40 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
               if (part.inlineData) ws.send(JSON.stringify({ audio: part.inlineData.data }));
             }
           }
+
           if (message.toolCall) {
+            console.log(`[DEBUG] Tool Call received:`, JSON.stringify(message.toolCall, null, 2));
             const functionResponses = [];
-            for (const call of message.toolCall.functionCalls) {
+            const functionCalls = message.toolCall.functionCalls || [];
+            
+            for (const call of functionCalls) {
               const toolFunc = toolHandlers[call.name];
               if (toolFunc) {
-                const result = await toolFunc(call.args);
-                ws.send(JSON.stringify({ toolCallResult: { name: call.name, result } }));
-                functionResponses.push({ id: call.id, name: call.name, response: result });
+                try {
+                    const result = await toolFunc(call.args);
+                    ws.send(JSON.stringify({ toolCallResult: { name: call.name, result } }));
+                    functionResponses.push({ id: call.id, name: call.name, response: result });
+                } catch (err) {
+                    console.error(`Error executing tool ${call.name}:`, err);
+                    functionResponses.push({ id: call.id, name: call.name, response: { error: "Execution failed" } });
+                }
               }
             }
             if (functionResponses.length > 0) session.sendToolResponse({ functionResponses });
           }
         },
-        onerror: (error: any) => console.error('!!! Gemini Error:', error),
+        onerror: (error: any) => {
+            console.error('!!! Gemini Error:', JSON.stringify(error, null, 2) || error);
+        },
         onclose: (event: any) => {
-          console.log(`--- Gemini Closed for ${userId} --- Code:`, event.code);
+          console.log(`--- Gemini Closed for ${userId} --- Code: ${event.code}`, event.reason ? `Reason: ${event.reason}` : '');
           if (ws.readyState === WebSocket.OPEN) ws.close();
         }
       }
