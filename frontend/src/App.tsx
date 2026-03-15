@@ -363,7 +363,11 @@ const App: React.FC = () => {
                         src={styleGallery[feedIndex].imageUrl} alt="Look" 
                         className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" 
                         onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`;
+                            const target = e.target as HTMLImageElement;
+                            const keyword = encodeURIComponent(styleGallery[feedIndex].style_keyword || styleGallery[feedIndex].name || 'fashion');
+                            if (!target.src.includes('loremflickr')) {
+                                target.src = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Date.now()}`;
+                            }
                         }}
                     />
                     <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
@@ -417,7 +421,11 @@ const App: React.FC = () => {
               <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-10">
                 <div className="bg-neutral-900 border border-neutral-800 w-full max-w-4xl rounded-3xl overflow-hidden flex shadow-2xl h-[70vh] text-white">
                   <img src={selectedItem.imageUrl} className="w-1/2 object-cover" onError={(e) => {
-                      (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`;
+                      const target = e.target as HTMLImageElement;
+                      if (!target.src.includes('loremflickr')) {
+                        const keyword = encodeURIComponent(selectedItem.style_keyword || selectedItem.name || 'fashion');
+                        target.src = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Date.now()}`;
+                      }
                   }} />
                   <div className="w-1/2 p-10 flex flex-col h-full bg-neutral-900">
                     <div className="flex justify-between items-start mb-6"><div><h2 className="text-3xl font-bold mb-2">{selectedItem.name}</h2><p className="text-neutral-400 text-sm">{selectedItem.reason}</p></div><button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
@@ -442,7 +450,7 @@ const App: React.FC = () => {
             )}
           </div>
         )}
-        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" onError={(e) => { (e.target as HTMLImageElement).src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format`; }} /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
+        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" onError={(e) => { const target = e.target as HTMLImageElement; if (!target.src.includes('loremflickr')) { const kw = encodeURIComponent(item.style_keyword || item.name || 'fashion'); target.src = `https://loremflickr.com/800/1000/fashion,${kw}/all?lock=${Date.now()}`; } }} /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
       </div>
     </div>
   );

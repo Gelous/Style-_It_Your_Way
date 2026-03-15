@@ -210,7 +210,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
             
             if (isPlaceholder) {
                 // Use LoremFlickr for high-quality, keyword-matched fashion images
-                finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all`;
+                // Add a random lock to bypass caching and get more variety
+                finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Math.floor(Math.random() * 1000000)}`;
             }
             
             return { ...opt, imageUrl: finalUrl };
