@@ -388,9 +388,9 @@ const App: React.FC = () => {
                 <div className={`absolute top-6 left-6 flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full text-[10px] font-bold ${isConnected ? 'text-white' : 'text-neutral-500'}`}><div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-neutral-700'}`} /> {isConnected ? 'LIVE' : 'INACTIVE'}</div>
               </div>
               
-              <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex flex-col items-center justify-center p-4">
+              <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex items-center justify-center p-4">
                 {styleGallery.length > 0 ? (
-                  <div className="w-full h-full relative flex flex-col items-center">
+                  <div className="w-full h-full relative">
                     <img 
                         src={styleGallery[feedIndex].imageUrl} alt="Look" 
                         className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" 
