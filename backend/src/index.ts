@@ -199,14 +199,19 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
+        console.log(`[DEBUG] generate_style_batch for user ${userId} with ${args.options?.length} suggestions.`);
         // Parallel processing for faster response
-        const suggestions = await Promise.all(args.options.map(async (opt: any) => {
+        const suggestions = await Promise.all(args.options.map(async (opt: any, i: number) => {
             let finalUrl = opt.imageUrl;
             const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
+            
             const isPlaceholder = !finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15 || !finalUrl.startsWith('http');
             
+            console.log(`  [Sugg ${i}] name: ${opt.name}, keyword: ${opt.style_keyword}, original_url: ${finalUrl}, isPlaceholder: ${isPlaceholder}`);
+
             if (isPlaceholder) {
                 finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Math.floor(Math.random() * 1000000)}`;
+                console.log(`  [Sugg ${i}] Using Fallback URL: ${finalUrl}`);
             }
             return { ...opt, imageUrl: finalUrl };
         }));

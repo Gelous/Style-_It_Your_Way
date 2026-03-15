@@ -100,14 +100,22 @@ const App: React.FC = () => {
       nextStartTime.current = audioContextRef.current.currentTime;
     };
     ws.onclose = () => setIsConnected(false);
-    ws.onmessage = async (event) => {
+    ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data.text) setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
-      if (data.audio) playAudioChunk(data.audio);
+      console.log("DEBUG: Received from Backend:", data);
+
+      if (data.text) setMessages((prev) => [...prev, { role: 'ai', text: data.text }]);
+      if (data.audio) playAudio(data.audio);
+
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
+        console.log(`DEBUG: Tool Result [${name}]:`, result);
         if (name === 'update_style_insights') setInsights(result);
-        if (name === 'generate_style_batch') { setStyleGallery(result.suggestions); setFeedIndex(0); }
+        if (name === 'generate_style_batch') { 
+            console.log("DEBUG: New Style Gallery Data:", result.suggestions);
+            setStyleGallery(result.suggestions); 
+            setFeedIndex(0); 
+        }
         if (name === 'get_closet') setCloset(result.items);
         if (name === 'add_to_closet') setCloset(prev => [...prev, result.item]);
       }
