@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
+import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<{ id: string; email: string; name?: string; sex?: string; basicPreferences?: string } | null>(null);
@@ -8,14 +8,17 @@ const App: React.FC = () => {
   const [authPassword, setAuthPassword] = useState('');
   const [authName, setAuthName] = useState('');
   const [authSex, setAuthSex] = useState('unspecified');
+  const [authBasicPreferences, setAuthBasicPreferences] = useState('');
   const [authError, setAuthError] = useState('');
+
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const [activeTab, setActiveTab] = useState('stylist');
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+
   
   const [styleGallery, setStyleGallery] = useState<any[]>([]);
   const [feedIndex, setFeedIndex] = useState(0);
@@ -24,8 +27,6 @@ const App: React.FC = () => {
 
   const [preferences, setPreferences] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
-  const inspirationInputRef = useRef<HTMLInputElement>(null);
-  const currentLookInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -66,11 +67,8 @@ const App: React.FC = () => {
     setAuthError('');
     const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
     const body = authMode === 'login'
-    const body = authMode === 'login' 
-    const body = authMode === 'login'
-origin/fix/security-and-robustness-2686056288197952117
         ? { email: authEmail, password: authPassword }
-        : { email: authEmail, password: authPassword, name: authName, sex: authSex, basicPreferences: authBasicPrefs };
+        : { email: authEmail, password: authPassword, name: authName, sex: authSex, basicPreferences: authBasicPreferences };
 
     try {
         const res = await fetch(`http://localhost:3001${endpoint}`, {
@@ -120,20 +118,26 @@ origin/fix/security-and-robustness-2686056288197952117
     wsRef.current = ws;
     ws.onopen = () => {
       setIsConnected(true);
-      setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
+
       if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 24000 });
       nextStartTime.current = audioContextRef.current.currentTime;
       ws.send(JSON.stringify({ text: "Coach, please use Google Search to find 6 real-world style options for my Target Goal. For each, find a REAL image URL and a direct shop link, then call generate_style_batch." }));
     };
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = (event) => {
+      setIsProcessing(false);
       const data = JSON.parse(event.data);
-      if (data.text) setMessages((prev) => [...prev, { role: 'ai', text: data.text }]);
+
       if (data.audio) playAudio(data.audio);
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
         if (name === 'update_style_insights') setInsights(result);
-        if (name === 'generate_style_batch') { setStyleGallery(result.suggestions); setFeedIndex(0); }
+        if (name === 'generate_style_batch') {
+            setStyleGallery(prev => {
+                if (prev.length === 0) { setFeedIndex(0); return result.suggestions; }
+                return [...prev, ...result.suggestions];
+            });
+        }
         if (name === 'get_closet') setCloset(result.items);
         if (name === 'add_to_closet') setCloset(prev => [...prev, result.item]);
       }
@@ -164,7 +168,7 @@ origin/fix/security-and-robustness-2686056288197952117
   const analyzeNow = () => { if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery." })); };
   const clearSession = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ text: "CLEAR CONTEXT: Start fresh." }));
-    setMessages([]); setStyleGallery([]); setInsights({ summary: 'Waiting...', top_tip: '', vocal_script: '' });
+
   };
 
   const handleLike = (item: any) => { if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ text: `I love "${item.name}". Add to closet.` })); };
@@ -194,19 +198,9 @@ origin/fix/security-and-robustness-2686056288197952117
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
     if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
     setIsRecording(false);
+    setIsProcessing(true);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: string) => {
-    const file = e.target.files?.[0];
-    if (file && wsRef.current?.readyState === WebSocket.OPEN) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1];
-        wsRef.current?.send(JSON.stringify({ text: `[Uploaded ${type}]`, realtimeInput: { video: { mimeType: file.type, data: base64 } } }));
-      };
-      reader.readAsDataURL(file);
-    }
-  };
 
   if (!user) {
     return (
@@ -224,6 +218,14 @@ origin/fix/security-and-robustness-2686056288197952117
                     <div className="grid grid-cols-2 gap-2">
                         <button type="button" onClick={() => setAuthSex('male')} className={`py-3 rounded-xl border transition text-xs font-bold ${authSex === 'male' ? 'bg-purple-600 border-purple-500' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}>MALE</button>
                         <button type="button" onClick={() => setAuthSex('female')} className={`py-3 rounded-xl border transition text-xs font-bold ${authSex === 'female' ? 'bg-purple-600 border-purple-500' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}>FEMALE</button>
+                    </div>
+                    <div className="relative group">
+                      <Shirt className="absolute left-4 top-4 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                      <textarea
+                        placeholder="Basic Style Preferences (e.g. minimalist, love black)"
+                        value={authBasicPreferences} onChange={(e) => setAuthBasicPreferences(e.target.value)}
+                        className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm resize-none h-20"
+                      />
                     </div>
                 </>
             )}
@@ -276,8 +278,17 @@ origin/fix/security-and-robustness-2686056288197952117
               </div>
             </div>
             <div className="w-96 flex flex-col gap-6">
-              <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0"><h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice</h3><div className="flex flex-col gap-3 text-sm"><p className="font-medium leading-relaxed">{insights.summary || 'Coach is watching...'}</p>{insights.top_tip && <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex gap-2"><Sparkles className="w-4 h-4 text-purple-500 shrink-0" /><p className="text-[11px] text-purple-900 font-bold leading-tight">{insights.top_tip}</p></div>}<button onClick={() => setShowReport(true)} disabled={!isConnected} className="flex items-center gap-2 font-bold text-xs mt-2 text-purple-600 hover:text-purple-800 transition"><FileText className="w-4 h-4" /> FULL ANALYSIS</button></div></div>
-              <div className="flex-1 flex flex-col rounded-3xl bg-neutral-900/40 border border-neutral-800 overflow-hidden"><div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">{messages.map((m, i) => <div key={i} className={`p-4 rounded-2xl text-sm max-w-[90%] ${m.role === 'ai' ? 'bg-neutral-800 text-white self-start' : m.role === 'system' ? 'text-neutral-500 text-center italic text-xs w-full' : 'bg-purple-600 text-white self-end'}`}>{m.text}</div>)}</div></div>
+              <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
+                <h3 className="font-bold flex items-center justify-between mb-4 text-neutral-900">
+                  <div className="flex items-center gap-2"><Shirt className="w-4 h-4" /> Advice Summary</div>
+                  {isProcessing && <div className="flex gap-1 items-center"><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.3s]"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.5s]"></div></div>}
+                </h3>
+                <div className="flex flex-col gap-3 text-sm">
+                  <p className="font-medium leading-relaxed">{insights.summary || 'Coach is analyzing your style and speaking aloud...'}</p>
+                  {insights.top_tip && <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex gap-2"><Sparkles className="w-4 h-4 text-purple-500 shrink-0" /><p className="text-[11px] text-purple-900 font-bold leading-tight">{insights.top_tip}</p></div>}
+                  <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
+                </div>
+              </div>
             </div>
             {showReport && (<div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-10"><div className="bg-neutral-900 border border-neutral-800 w-full max-w-2xl rounded-3xl p-8 flex flex-col max-h-[80vh] shadow-2xl text-white"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-3"><FileText className="text-purple-500" /> Style Report</h2><button onClick={() => setShowReport(false)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div><div className="flex-1 overflow-y-auto space-y-6 text-neutral-300 pr-4 custom-scrollbar"><section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Executive Summary</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.summary}</p></section><section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Pro Tip</h4><p className="leading-relaxed bg-purple-900/20 p-4 rounded-2xl border border-purple-500/30 text-white font-medium italic">"{insights.top_tip}"</p></section><section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Full Coaching Advice</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-sm whitespace-pre-wrap">{insights.vocal_script}</p></section></div></div></div>)}
             {selectedItem && (<div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-10"><div className="bg-neutral-900 border border-neutral-800 w-full max-w-4xl rounded-3xl overflow-hidden flex shadow-2xl h-[70vh] text-white"><img src={selectedItem.imageUrl} className="w-1/2 object-cover" onError={(e) => { const target = e.target as HTMLImageElement; if (!target.src.includes('pollinations.ai')) { const kw = encodeURIComponent(`${selectedItem.name} fashion editorial`); target.src = `https://image.pollinations.ai/prompt/${kw}?width=800&height=1000&nologo=true&seed=${Date.now()}`; } else { target.src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop`; } }} /><div className="w-1/2 p-10 flex flex-col h-full bg-neutral-900"><div className="flex justify-between items-start mb-6"><div><h2 className="text-3xl font-bold mb-2">{selectedItem.name}</h2><p className="text-neutral-400 text-sm">{selectedItem.reason}</p></div><button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div><div className="mt-auto"><h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4><div className="grid grid-cols-1 gap-3">{selectedItem.retailers?.map((r: string) => (<div key={r} onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(selectedItem.name + " " + r)}`, '_blank')} className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"><span className="font-medium text-sm">{r}</span><ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" /></div>))}</div></div></div></div></div>)}

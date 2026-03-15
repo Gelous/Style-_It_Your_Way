@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
@@ -177,11 +177,11 @@ const toolsList = [
         name: 'update_style_insights',
         description: 'Updates the visual summary report.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
-            summary: { type: Type.STRING, description: 'Short 1-2 sentence overview' },
-            top_tip: { type: Type.STRING, description: 'One actionable stylistic tip' },
-            vocal_script: { type: Type.STRING, description: 'The full detailed advice to be spoken' }
+            summary: { type: 'STRING', description: 'Short 1-2 sentence overview' },
+            top_tip: { type: 'STRING', description: 'One actionable stylistic tip' },
+            vocal_script: { type: 'STRING', description: 'The full detailed advice to be spoken' }
           },
           required: ['summary', 'top_tip', 'vocal_script']
         }
@@ -190,19 +190,19 @@ const toolsList = [
         name: 'generate_style_batch',
         description: 'Generates a batch of 6 styles with verified images.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
             options: {
-              type: Type.ARRAY,
+              type: 'ARRAY',
               items: {
-                type: Type.OBJECT,
+                type: 'OBJECT',
                 properties: {
-                  name: { type: Type.STRING },
-                  reason: { type: Type.STRING },
-                  retailers: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  imageUrl: { type: Type.STRING },
-                  style_keyword: { type: Type.STRING },
-                  shop_url: { type: Type.STRING }
+                  name: { type: 'STRING' },
+                  reason: { type: 'STRING' },
+                  retailers: { type: 'ARRAY', items: { type: 'STRING' } },
+                  imageUrl: { type: 'STRING' },
+                  style_keyword: { type: 'STRING' },
+                  shop_url: { type: 'STRING' }
                 },
                 required: ['name', 'reason', 'retailers', 'imageUrl', 'style_keyword', 'shop_url']
               }
@@ -215,12 +215,12 @@ const toolsList = [
         name: 'add_to_closet',
         description: 'Adds item to closet.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
-            name: { type: Type.STRING },
-            description: { type: Type.STRING },
-            imageUrl: { type: Type.STRING },
-            retailers: { type: Type.ARRAY, items: { type: Type.STRING } }
+            name: { type: 'STRING' },
+            description: { type: 'STRING' },
+            imageUrl: { type: 'STRING' },
+            retailers: { type: 'ARRAY', items: { type: 'STRING' } }
           },
           required: ['name', 'description', 'imageUrl', 'retailers']
         }
@@ -291,8 +291,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
             setTimeout(() => {
                 if (session) {
                     session.sendClientContent({ 
-                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }], 
-                      main
+                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }],
                         turnComplete: true 
                     });
                 }
@@ -300,7 +299,6 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          main
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
@@ -336,6 +334,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
+        if (data.realtimeInput.audio) session.sendRealtimeInput({ audio: data.realtimeInput.audio });
+        else if (data.realtimeInput.video) session.sendRealtimeInput({ media: data.realtimeInput.video });
+
         // Fallback to original working format or whatever frontend sends
         if (data.realtimeInput.mediaChunks) {
             for (const chunk of data.realtimeInput.mediaChunks) {
@@ -343,7 +344,6 @@ wss.on('connection', async (ws: WebSocket, request) => {
                 else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
             }
         }
-origin/fix/security-and-robustness-2686056288197952117
       } else if (data.text) {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
