@@ -23,9 +23,15 @@ const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'siyw';
 let storage: Storage | null = null;
 try { storage = new Storage(); } catch (e) {}
 
+// Helper to sanitize userId against path traversal
+function sanitizeId(id: string) {
+    return id.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 // Helper to save data (Scoped by User)
 async function saveToPersistence(userId: string, fileName: string, data: any) {
-  const cloudPath = `${userId}/${fileName}`;
+  const safeUserId = sanitizeId(userId);
+  const cloudPath = `${safeUserId}/${fileName}`;
   try {
     if (storage) {
         await storage.bucket(BUCKET_NAME).file(cloudPath).save(JSON.stringify(data, null, 2));
@@ -37,7 +43,7 @@ async function saveToPersistence(userId: string, fileName: string, data: any) {
   
   // Local Fallback with atomic-like write (write to temp file then rename)
   try {
-      const userDir = path.join(process.cwd(), 'data', userId);
+      const userDir = path.join(process.cwd(), 'data', safeUserId);
       await fs.mkdir(userDir, { recursive: true });
       const tempFile = path.join(userDir, `${fileName}.tmp`);
       const targetFile = path.join(userDir, fileName);
@@ -50,7 +56,8 @@ async function saveToPersistence(userId: string, fileName: string, data: any) {
 
 // Helper to load data (Scoped by User)
 async function loadFromPersistence(userId: string, fileName: string, defaultValue: any) {
-  const cloudPath = `${userId}/${fileName}`;
+  const safeUserId = sanitizeId(userId);
+  const cloudPath = `${safeUserId}/${fileName}`;
   try {
     if (storage) {
         const [exists] = await storage.bucket(BUCKET_NAME).file(cloudPath).exists();
@@ -64,7 +71,7 @@ async function loadFromPersistence(userId: string, fileName: string, defaultValu
   }
 
   // Local Fallback
-  const localPath = path.join(process.cwd(), 'data', userId, fileName);
+  const localPath = path.join(process.cwd(), 'data', safeUserId, fileName);
   try {
     const content = await fs.readFile(localPath, 'utf-8');
     return JSON.parse(content);
@@ -111,14 +118,24 @@ async function hashPassword(password: string, salt: string) {
 app.post('/api/signup', async (req, res) => {
     try {
         const { email, password, name, sex, basicPreferences } = req.body;
-        if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+        if (!email || typeof email !== 'string' || !email.includes('@') || email.length > 255) {
+            return res.status(400).json({ error: 'Valid email required' });
+        }
+        if (!password || typeof password !== 'string' || password.length < 8) {
+            return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        }
 
         const users = await getUsers();
         if (users.find((u: any) => u.email === email)) return res.status(409).json({ error: 'User exists' });
 
+        // Sanitize optional inputs for length
+        const safeName = typeof name === 'string' ? name.substring(0, 100) : '';
+        const safeSex = typeof sex === 'string' ? sex.substring(0, 50) : 'unspecified';
+        const safePrefs = typeof basicPreferences === 'string' ? basicPreferences.substring(0, 500) : '';
+
         const salt = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await hashPassword(password, salt);
-        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, name: name || '', sex: sex || 'unspecified', basicPreferences: basicPreferences || '' };
+        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, name: safeName, sex: safeSex, basicPreferences: safePrefs };
         users.push(newUser);
         await saveUsers(users);
         res.status(201).json({ id: newUser.id, email: newUser.email, name: newUser.name, sex: newUser.sex, basicPreferences: newUser.basicPreferences });
@@ -130,7 +147,9 @@ app.post('/api/signup', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+        if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
+            return res.status(400).json({ error: 'Email and password required' });
+        }
 
         const users = await getUsers();
         const user = users.find((u: any) => u.email === email);
@@ -228,10 +247,21 @@ const toolsList = [
 wss.on('connection', async (ws: WebSocket, request) => {
   // Extract userId from URL query params
   const url = new URL(request.url!, `http://${request.headers.host}`);
-  const userId = url.searchParams.get('userId');
+  const rawUserId = url.searchParams.get('userId');
 
-  if (!userId) {
+  if (!rawUserId) {
       console.log('Rejected: No userId provided');
+      ws.close();
+      return;
+  }
+
+  // Basic validation to prevent arbitrary connections or injection
+  const userId = sanitizeId(rawUserId);
+  const users = await getUsers();
+  const user = users.find((u: any) => u.id === userId);
+
+  if (!user) {
+      console.log(`Rejected: Invalid userId connected (${userId})`);
       ws.close();
       return;
   }
@@ -243,11 +273,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
   let myCloset = await loadFromPersistence(userId, 'closet.json', []);
   
   // Find User Demographic
-  const users = await getUsers();
-  const user = users.find((u: any) => u.id === userId);
-  const userName = user?.name || '';
-  const userSex = user?.sex || 'unspecified';
-  const userBasicPreferences = user?.basicPreferences || '';
+  const userName = user.name || '';
+  const userSex = user.sex || 'unspecified';
+  const userBasicPreferences = user.basicPreferences || '';
 
   ws.send(JSON.stringify({ toolCallResult: { name: 'get_closet', result: { items: myCloset } } }));
 
