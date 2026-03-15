@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type, Modality } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
@@ -24,7 +24,13 @@ const wss = new WebSocketServer({ port: 4002 });
 // Persistence Configuration
 const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'siyw';
 let storage: Storage | null = null;
-try { storage = new Storage(); } catch (e) {}
+try {
+  // Only initialize Storage if the service account credentials exist in the environment
+  // This prevents the loud GoogleAuth crash loop on local machines
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    storage = new Storage();
+  }
+} catch (e) {}
 
 // Helper to sanitize userId against path traversal
 function sanitizeId(id: string) {
@@ -164,7 +170,7 @@ UI & COMMUNICATION RULES:
 `;
 
 const toolsList = [
-  { 
+  {
     googleSearch: {},
     functionDeclarations: [
       {
@@ -238,7 +244,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
   let myPreferences = (await loadFromPersistence(userId, 'preferences.json', { preferences: '' })).preferences;
   let myCloset = await loadFromPersistence(userId, 'closet.json', []);
   
+<<<<<<< HEAD
   const contextPrompt = 
+=======
+  const contextPrompt =
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
     `USER NAME: ${user.name || 'User'}\nUSER SEX: ${user.sex || 'unspecified'}\nUSER BASIC PREFS: ${user.basicPreferences || ''}\n` +
     (myPreferences ? `\nCURRENT SESSION STYLE TARGET: ${myPreferences}` : "");
 
@@ -277,7 +287,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + "\n\n" + contextPrompt }] },
         tools: toolsList,
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
+<<<<<<< HEAD
         responseModalities: ['audio']
+=======
+        responseModalities: ['AUDIO']
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
       },
       callbacks: {
         onopen: () => {
@@ -285,7 +299,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
             setTimeout(() => {
                 if (session) {
                     session.sendClientContent({ 
+<<<<<<< HEAD
                         turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }], 
+=======
+                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }],
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
                         turnComplete: true 
                     });
                 }
@@ -293,7 +311,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+<<<<<<< HEAD
           
+=======
+
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
@@ -329,15 +351,31 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
+<<<<<<< HEAD
         if (data.realtimeInput.audio) session.sendRealtimeInput({ audio: data.realtimeInput.audio });
         else if (data.realtimeInput.video) session.sendRealtimeInput({ video: data.realtimeInput.video });
+=======
+        // Fallback to original working format or whatever frontend sends
+        if (data.realtimeInput.mediaChunks) {
+            for (const chunk of data.realtimeInput.mediaChunks) {
+                if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: { data: chunk.data, mimeType: chunk.mimeType } });
+                else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
+            }
+        }
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
       } else if (data.text) {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
+<<<<<<< HEAD
             session.sendClientContent({ 
                 turns: [{ role: 'user', parts: [{ text: `CRITICAL: My Target Aesthetic is now: "${myPreferences}". Forget previous goals and update gallery.` }] }], 
                 turnComplete: true 
+=======
+            session.sendClientContent({
+                turns: [{ role: 'user', parts: [{ text: `CRITICAL: My Target Aesthetic is now: "${myPreferences}". Forget previous goals and update gallery.` }] }],
+                turnComplete: true
+>>>>>>> origin/fix/security-and-robustness-2686056288197952117
             });
         } else { session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true }); }
       }
