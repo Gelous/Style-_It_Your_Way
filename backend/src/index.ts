@@ -199,7 +199,13 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
-        console.log(`[DEBUG] generate_style_batch for user ${userId} with ${args.options?.length} suggestions.`);
+        console.log(`[DEBUG] generate_style_batch for user ${userId} with ${args.options?.length || 0} suggestions.`);
+        
+        if (!args.options || !Array.isArray(args.options)) {
+            console.error("!!! generate_style_batch: Invalid or empty options received.");
+            return { suggestions: [] };
+        }
+
         // Parallel processing for faster response
         const suggestions = await Promise.all(args.options.map(async (opt: any, i: number) => {
             let finalUrl = opt.imageUrl;
@@ -211,7 +217,6 @@ wss.on('connection', async (ws: WebSocket, request) => {
 
             if (isPlaceholder) {
                 // Use Pollinations.ai for high-quality, prompt-matched fashion images.
-                // This ensures that "classic business" actually shows a business look.
                 const prompt = encodeURIComponent(`${opt.style_keyword || opt.name} fashion editorial professional photography high resolution`);
                 finalUrl = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=1000&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
                 console.log(`  [Sugg ${i}] Using AI-Generated Fallback: ${finalUrl}`);

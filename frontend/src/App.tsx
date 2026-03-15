@@ -181,7 +181,7 @@ const App: React.FC = () => {
         const startY = (video.videoHeight - size) / 2;
         
         ctx.drawImage(video, startX, startY, size, size, 0, 0, size, size);
-        const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+        const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         wsRef.current.send(JSON.stringify({
           realtimeInput: {
@@ -189,7 +189,7 @@ const App: React.FC = () => {
           }
         }));
       }
-    }, 500); // Send every 500ms
+    }, 1000); // Send every 1000ms (more stable)
 
     return () => clearInterval(interval);
   }, [isConnected]);
