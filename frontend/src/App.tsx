@@ -1,32 +1,56 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Mic, MicOff, Play, Square, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Search, PlusCircle, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, Globe, Info, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
+import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email: string; name: string; sex: string; basicPreferences: string } | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authSex, setAuthSex] = useState('unspecified');
+  const [authBasicPreferences, setAuthBasicPreferences] = useState('');
   const [authError, setAuthError] = useState('');
 
   const [activeTab, setActiveTab] = useState('stylist');
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   
   const [styleGallery, setStyleGallery] = useState<any[]>([]);
   const [feedIndex, setFeedIndex] = useState(0);
   const [closet, setCloset] = useState<any[]>([]);
   const [insights, setInsights] = useState({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
 
+  const nextItem = () => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => {
+        const next = prev + 1;
+        // If we are getting close to the end, ask for more items silently
+        if (next === styleGallery.length - 1 && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ text: "Generate 5 more new style gallery options based on my target goal from Google Shop." }));
+        }
+        return next % styleGallery.length;
+      });
+    }
+  };
+
+  const prevItem = () => {
+    if (styleGallery.length > 0) {
+      setFeedIndex((prev) => (prev - 1 + styleGallery.length) % styleGallery.length);
+    }
+  };
+
   const [preferences, setPreferences] = useState('');
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const inspirationInputRef = useRef<HTMLInputElement>(null);
   const currentLookInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const nextStartTime = useRef(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -41,16 +65,19 @@ const App: React.FC = () => {
   // Persistent Camera Stream acquisition
   useEffect(() => {
     if (!user) return;
-    const getStream = async () => {
-        try {
-            if (!cameraStreamRef.current) {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                cameraStreamRef.current = stream;
-            }
-        } catch (err) { console.error("Error acquiring camera stream:", err); }
-    };
-    getStream();
-  }, [user]);
+    if (cameraStream) return;
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then((stream) => setCameraStream(stream))
+      .catch((err) => console.error("Error accessing camera:", err));
+  }, [user, cameraStream]);
+
+  // Re-attach stream to video element when tab changes or stream initializes
+  useEffect(() => {
+    if (activeTab === 'stylist' && videoRef.current && cameraStream) {
+      videoRef.current.srcObject = cameraStream;
+    }
+  }, [activeTab, cameraStream]);
 
   // Re-attach stream to video element whenever 'stylist' tab is active
   useEffect(() => {
@@ -69,10 +96,14 @@ const App: React.FC = () => {
     setAuthError('');
     const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
     try {
+        const payload = authMode === 'signup'
+          ? { email: authEmail, password: authPassword, name: authName, sex: authSex, basicPreferences: authBasicPreferences }
+          : { email: authEmail, password: authPassword };
+
         const res = await fetch(`http://localhost:3001${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: authEmail, password: authPassword })
+            body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
@@ -90,64 +121,44 @@ const App: React.FC = () => {
     localStorage.removeItem('styleSenseUser');
   };
 
-  const playAudio = useCallback(async (base64Data: string) => {
-    if (!audioContextRef.current) return;
-    try {
-        const binaryString = window.atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-        
-        // Gemini Live usually sends 16-bit Mono PCM @ 24kHz
-        const floatData = new Float32Array(bytes.length / 2);
-        for (let i = 0; i < floatData.length; i++) {
-            const int16 = (bytes[i * 2 + 1] << 8) | bytes[i * 2];
-            floatData[i] = (int16 >= 0x8000 ? int16 - 0x10000 : int16) / 32768.0;
-        }
-
-        const audioBuffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
-        audioBuffer.getChannelData(0).set(floatData);
-
-        const source = audioContextRef.current.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContextRef.current.destination);
-
-        const startTime = Math.max(nextStartTime.current, audioContextRef.current.currentTime);
-        source.start(startTime);
-        nextStartTime.current = startTime + audioBuffer.duration;
-    } catch (err) { console.error("Error playing audio:", err); }
-  }, []);
-
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!user) return;
+
+    // Create AudioContext on a user gesture to satisfy browser policies (Chrome/Firefox/Safari)
+    try {
+        if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        }
+        if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+        }
+    } catch(e) {
+        console.error("Failed to initialize audio context", e);
+    }
+
     const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
     wsRef.current = ws;
     ws.onopen = () => {
       setIsConnected(true);
-      setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      nextStartTime.current = audioContextRef.current.currentTime;
-      
-      // Explicitly ask for real-world grounding using Google Search
-      ws.send(JSON.stringify({ 
-        text: "Coach, please use Google Search to find 6 real-world style options for my Target Goal. For each, find a REAL image URL and a direct shop link, then call generate_style_batch." 
-      }));
+      if (audioContextRef.current) {
+          nextStartTime.current = audioContextRef.current.currentTime;
+      }
     };
     ws.onclose = () => setIsConnected(false);
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
+      setIsProcessing(false); // AI responded, hide processing indicator
       const data = JSON.parse(event.data);
-      console.log("DEBUG: Received from Backend:", data);
-
-      if (data.text) setMessages((prev) => [...prev, { role: 'ai', text: data.text }]);
-      if (data.audio) playAudio(data.audio);
-
+      if (data.audio) playAudioChunk(data.audio);
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
         console.log(`DEBUG: Tool Result [${name}]:`, result);
         if (name === 'update_style_insights') setInsights(result);
-        if (name === 'generate_style_batch') { 
-            console.log("DEBUG: New Style Gallery Data:", result.suggestions);
-            setStyleGallery(result.suggestions); 
-            setFeedIndex(0); 
+        if (name === 'generate_style_batch') {
+            setStyleGallery(prev => {
+                // If it's empty, set feedIndex to 0. If it's appending, just add.
+                if (prev.length === 0) { setFeedIndex(0); return result.suggestions; }
+                return [...prev, ...result.suggestions];
+            });
         }
         if (name === 'get_closet') setCloset(result.items);
         if (name === 'add_to_closet') setCloset(prev => [...prev, result.item]);
@@ -155,7 +166,21 @@ const App: React.FC = () => {
     };
   }, [user]);
 
-  const disconnect = useCallback(() => { wsRef.current?.close(); }, []);
+  const interruptAI = useCallback(() => {
+    if (audioContextRef.current) {
+      // Stop all actively playing sources in the queue
+      activeSourcesRef.current.forEach(source => {
+        try { source.stop(); } catch(e) {}
+      });
+      activeSourcesRef.current = [];
+      // Reset the start time so new audio starts playing immediately
+      nextStartTime.current = audioContextRef.current.currentTime;
+      // Also send a special message or just let the real-time audio from microphone naturally interrupt Gemini
+      // But clearing the local playback buffer is required so we don't hear stale queued sentences.
+    }
+  }, []);
+
+  const disconnect = useCallback(() => { wsRef.current?.close(); interruptAI(); }, [interruptAI]);
 
   const nextItem = useCallback(() => {
     if (styleGallery.length > 0) {
@@ -199,6 +224,8 @@ const App: React.FC = () => {
 
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      interruptAI();
+      setIsProcessing(true);
       wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery with 6 new suggestions." }));
     }
   };
@@ -214,6 +241,8 @@ const App: React.FC = () => {
 
   const handleLike = (item: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      interruptAI();
+      setIsProcessing(true);
       wsRef.current.send(JSON.stringify({ text: `I love the "${item.name}" suggestion. Add it to my closet.` }));
     }
   };
@@ -233,6 +262,13 @@ const App: React.FC = () => {
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
+
+    // Cleanup reference when audio finishes playing
+    source.onended = () => {
+        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+    };
+    activeSourcesRef.current.push(source);
+
     const now = audioCtx.currentTime;
     if (nextStartTime.current < now) nextStartTime.current = now + 0.1;
     source.start(nextStartTime.current);
@@ -240,10 +276,17 @@ const App: React.FC = () => {
   };
 
   const startRecording = async () => {
+    interruptAI(); // User spoke, cut off AI playback locally immediately
     try {
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 16000 });
-      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+      // Re-use or create audio context
+      if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      }
+      if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } });
       mediaStreamRef.current = stream;
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
@@ -266,18 +309,20 @@ const App: React.FC = () => {
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
       setIsRecording(true);
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error("Error accessing microphone:", err); }
   };
 
   const stopRecording = () => {
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
     if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
     setIsRecording(false);
+    setIsProcessing(true); // After user finishes recording, expect processing
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'inspiration' | 'current_look') => {
     const file = e.target.files?.[0];
     if (file && wsRef.current?.readyState === WebSocket.OPEN) {
+      setIsProcessing(true);
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = (reader.result as string).split(',')[1];
@@ -285,7 +330,6 @@ const App: React.FC = () => {
           text: `[User uploaded a ${type.replace('_', ' ')} image]`,
           realtimeInput: { mediaChunks: [{ mimeType: file.type, data: base64 }] }
         }));
-        setMessages(prev => [...prev, { role: 'system', text: `Uploaded ${type.replace('_', ' ')}` }]);
       };
       reader.readAsDataURL(file);
     }
@@ -305,6 +349,16 @@ const App: React.FC = () => {
           </div>
 
           <form onSubmit={handleAuth} className="space-y-4">
+            {authMode === 'signup' && (
+              <div className="relative group">
+                <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                <input
+                  type="text" required placeholder="Full Name"
+                  value={authName} onChange={(e) => setAuthName(e.target.value)}
+                  className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm"
+                />
+              </div>
+            )}
             <div className="relative group">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
               <input 
@@ -322,6 +376,31 @@ const App: React.FC = () => {
               />
             </div>
             
+            {authMode === 'signup' && (
+              <>
+                <div className="relative group">
+                  <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                  <select
+                    value={authSex} onChange={(e) => setAuthSex(e.target.value)}
+                    className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm text-neutral-400 appearance-none"
+                  >
+                    <option value="unspecified">Prefer not to say</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="non-binary">Non-binary</option>
+                  </select>
+                </div>
+                <div className="relative group">
+                  <Shirt className="absolute left-4 top-4 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                  <textarea
+                    placeholder="Basic Preferences (e.g. I only wear black, I love oversized fits, no synthetic fabrics)"
+                    value={authBasicPreferences} onChange={(e) => setAuthBasicPreferences(e.target.value)}
+                    className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm resize-none h-24"
+                  />
+                </div>
+              </>
+            )}
+
             {authError && <p className="text-red-500 text-xs text-center font-medium bg-red-500/10 py-2 rounded-lg">{authError}</p>}
 
             <button type="submit" className="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-neutral-200 transition-all shadow-xl shadow-white/5 flex items-center justify-center gap-2 mt-6">
@@ -353,10 +432,10 @@ const App: React.FC = () => {
           <button onClick={handleLogout} className="p-2 hover:bg-neutral-800 rounded-lg text-neutral-500 hover:text-red-400 transition" title="Logout"><LogOut className="w-5 h-5" /></button>
         </div>
         <div className="flex items-center gap-3 p-4 bg-neutral-900/50 border border-neutral-800 rounded-2xl">
-            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-sm font-bold">{user.email[0].toUpperCase()}</div>
+            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-sm font-bold">{user.name ? user.name[0].toUpperCase() : user.email[0].toUpperCase()}</div>
             <div className="overflow-hidden">
                 <p className="text-[10px] text-neutral-500 uppercase font-bold tracking-widest">Logged In As</p>
-                <p className="text-xs font-medium truncate">{user.email}</p>
+                <p className="text-xs font-medium truncate">{user.name || user.email}</p>
             </div>
         </div>
         <nav className="flex flex-col gap-2">
@@ -447,20 +526,14 @@ const App: React.FC = () => {
 
             <div className="w-96 flex flex-col gap-6">
               <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
-                <h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice Summary</h3>
+                <h3 className="font-bold flex items-center justify-between mb-4 text-neutral-900">
+                  <div className="flex items-center gap-2"><Shirt className="w-4 h-4" /> Advice Summary</div>
+                  {isProcessing && <div className="flex gap-1 items-center"><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.3s]"></div><div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-.5s]"></div></div>}
+                </h3>
                 <div className="flex flex-col gap-3 text-sm">
-                  <p className="font-medium leading-relaxed">{insights.summary || 'Coach is watching your feed...'}</p>
-                  {insights.top_tip && (
-                    <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex gap-2">
-                        <Sparkles className="w-4 h-4 text-purple-500 shrink-0" />
-                        <p className="text-[11px] text-purple-900 font-bold leading-tight">{insights.top_tip}</p>
-                    </div>
-                  )}
+                  <p className="font-medium leading-relaxed">{insights.improvements || 'Coach is analyzing your style and speaking aloud...'}</p>
                   <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
                 </div>
-              </div>
-              <div className="flex-1 flex flex-col rounded-3xl bg-neutral-900/40 border border-neutral-800 overflow-hidden">
-                <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">{messages.map((m, i) => <div key={i} className={`p-4 rounded-2xl text-sm max-w-[90%] ${m.role === 'ai' ? 'bg-neutral-800 text-white self-start' : m.role === 'system' ? 'text-neutral-500 text-center italic text-xs w-full' : 'bg-purple-600 text-white self-end'}`}>{m.text}</div>)}</div>
               </div>
             </div>
 
@@ -512,7 +585,35 @@ const App: React.FC = () => {
             )}
           </div>
         )}
-        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" onError={(e) => { const target = e.target as HTMLImageElement; if (!target.src.includes('pollinations.ai')) { const kw = encodeURIComponent(`${item.style_keyword || item.name || 'fashion'} fashion editorial`); target.src = `https://image.pollinations.ai/prompt/${kw}?width=800&height=1000&nologo=true&seed=${Date.now()}`; } else { target.src = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop`; } }} /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
+        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
+        {activeTab === 'trends' && (
+          <div className="flex-1 p-8 overflow-y-auto text-white">
+            <h2 className="text-3xl font-bold mb-8 flex items-center gap-3"><TrendingUp className="text-purple-500" /> Global Style Trends</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[
+                { title: 'Y2K Revival', desc: 'Low-rise jeans, baby tees, and metallic accessories are dominating street style this season.', tags: ['Vintage', 'Streetwear'] },
+                { title: 'Quiet Luxury', desc: 'Elevated basics, neutral tones, and focus on high-quality fabrics without visible logos.', tags: ['Minimalist', 'Elegant'] },
+                { title: 'Gorpcore', desc: 'Functional outdoor gear worn as everyday fashion. Think cargo pants and technical jackets.', tags: ['Utility', 'Casual'] },
+                { title: 'Corporate Core', desc: 'Oversized blazers, tailored trousers, and loafers mixed with casual elements.', tags: ['Office', 'Chic'] },
+                { title: 'Balletcore', desc: 'Wrap tops, leg warmers, tulle skirts, and ballet flats bringing soft feminine energy.', tags: ['Feminine', 'Soft'] },
+                { title: 'Eclectic Grandpa', desc: 'Sweater vests, colorful cardigans, and retro sneakers paired playfully.', tags: ['Retro', 'Comfort'] }
+              ].map((trend, i) => (
+                <div key={i} className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 hover:border-purple-500 transition cursor-pointer group shadow-xl">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition">{trend.title}</h3>
+                    <Sparkles className="w-5 h-5 text-neutral-600 group-hover:text-purple-500 transition" />
+                  </div>
+                  <p className="text-neutral-400 text-sm mb-6 leading-relaxed">{trend.desc}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {trend.tags.map(tag => (
+                      <span key={tag} className="text-[10px] uppercase tracking-widest font-bold px-3 py-1 bg-neutral-800 text-neutral-300 rounded-full border border-neutral-700">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

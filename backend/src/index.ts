@@ -7,6 +7,7 @@ import { GoogleGenAI, Type, Modality } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -22,25 +23,41 @@ const BUCKET_NAME = process.env.GCS_BUCKET_NAME || 'siyw';
 let storage: Storage | null = null;
 try { storage = new Storage(); } catch (e) {}
 
+// Helper to sanitize userId against path traversal
+function sanitizeId(id: string) {
+    return id.replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 // Helper to save data (Scoped by User)
 async function saveToPersistence(userId: string, fileName: string, data: any) {
-  const cloudPath = `${userId}/${fileName}`;
+  const safeUserId = sanitizeId(userId);
+  const cloudPath = `${safeUserId}/${fileName}`;
   try {
     if (storage) {
         await storage.bucket(BUCKET_NAME).file(cloudPath).save(JSON.stringify(data, null, 2));
         return;
     }
-  } catch (err) {}
+  } catch (err) {
+      console.warn(`Failed to save to GCS bucket ${BUCKET_NAME}:`, err);
+  }
   
-  // Local Fallback
-  const userDir = path.join(process.cwd(), 'data', userId);
-  await fs.mkdir(userDir, { recursive: true });
-  await fs.writeFile(path.join(userDir, fileName), JSON.stringify(data, null, 2));
+  // Local Fallback with atomic-like write (write to temp file then rename)
+  try {
+      const userDir = path.join(process.cwd(), 'data', safeUserId);
+      await fs.mkdir(userDir, { recursive: true });
+      const tempFile = path.join(userDir, `${fileName}.tmp`);
+      const targetFile = path.join(userDir, fileName);
+      await fs.writeFile(tempFile, JSON.stringify(data, null, 2));
+      await fs.rename(tempFile, targetFile);
+  } catch (err) {
+      console.error('Failed local fallback saveToPersistence:', err);
+  }
 }
 
 // Helper to load data (Scoped by User)
 async function loadFromPersistence(userId: string, fileName: string, defaultValue: any) {
-  const cloudPath = `${userId}/${fileName}`;
+  const safeUserId = sanitizeId(userId);
+  const cloudPath = `${safeUserId}/${fileName}`;
   try {
     if (storage) {
         const [exists] = await storage.bucket(BUCKET_NAME).file(cloudPath).exists();
@@ -49,46 +66,105 @@ async function loadFromPersistence(userId: string, fileName: string, defaultValu
             return JSON.parse(content.toString());
         }
     }
-  } catch (err) {}
+  } catch (err) {
+      console.warn(`Failed to load from GCS bucket ${BUCKET_NAME}:`, err);
+  }
 
   // Local Fallback
-  const localPath = path.join(process.cwd(), 'data', userId, fileName);
+  const localPath = path.join(process.cwd(), 'data', safeUserId, fileName);
   try {
     const content = await fs.readFile(localPath, 'utf-8');
     return JSON.parse(content);
   } catch (e) { return defaultValue; }
 }
 
-// User Database (Local JSON)
+// User Database (Local JSON) - Queue based concurrent protection
 const USERS_FILE = path.join(process.cwd(), 'local_users.json');
+let saveUsersQueue: Promise<void> = Promise.resolve();
+
 async function getUsers() {
     try {
         const content = await fs.readFile(USERS_FILE, 'utf-8');
         return JSON.parse(content);
     } catch (e) { return []; }
 }
+
 async function saveUsers(users: any[]) {
-    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+    const doSave = async () => {
+        try {
+            const tempFile = `${USERS_FILE}.tmp`;
+            await fs.writeFile(tempFile, JSON.stringify(users, null, 2));
+            await fs.rename(tempFile, USERS_FILE);
+        } catch (err) {
+            console.error('Failed to save users:', err);
+        }
+    };
+
+    // Chain onto the queue to ensure sequential writes
+    saveUsersQueue = saveUsersQueue.then(doSave).catch(() => doSave());
+    return saveUsersQueue;
+}
+
+import { promisify } from 'util';
+const scryptAsync = promisify(crypto.scrypt);
+
+// Helper to hash password asynchronously
+async function hashPassword(password: string, salt: string) {
+    const derivedKey = await scryptAsync(password, salt, 64) as Buffer;
+    return derivedKey.toString('hex');
 }
 
 // Auth Endpoints
 app.post('/api/signup', async (req, res) => {
-    const { email, password } = req.body;
-    const users = await getUsers();
-    if (users.find((u: any) => u.email === email)) return res.status(400).json({ error: 'User exists' });
-    
-    const newUser = { id: 'user_' + Date.now(), email, password };
-    users.push(newUser);
-    await saveUsers(users);
-    res.json({ id: newUser.id, email: newUser.email });
+    try {
+        const { email, password, name, sex, basicPreferences } = req.body;
+        if (!email || typeof email !== 'string' || !email.includes('@') || email.length > 255) {
+            return res.status(400).json({ error: 'Valid email required' });
+        }
+        if (!password || typeof password !== 'string' || password.length < 8) {
+            return res.status(400).json({ error: 'Password must be at least 8 characters' });
+        }
+
+        const users = await getUsers();
+        if (users.find((u: any) => u.email === email)) return res.status(409).json({ error: 'User exists' });
+
+        // Sanitize optional inputs for length
+        const safeName = typeof name === 'string' ? name.substring(0, 100) : '';
+        const safeSex = typeof sex === 'string' ? sex.substring(0, 50) : 'unspecified';
+        const safePrefs = typeof basicPreferences === 'string' ? basicPreferences.substring(0, 500) : '';
+
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hashedPassword = await hashPassword(password, salt);
+        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, name: safeName, sex: safeSex, basicPreferences: safePrefs };
+        users.push(newUser);
+        await saveUsers(users);
+        res.status(201).json({ id: newUser.id, email: newUser.email, name: newUser.name, sex: newUser.sex, basicPreferences: newUser.basicPreferences });
+    } catch (e) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    const users = await getUsers();
-    const user = users.find((u: any) => u.email === email && u.password === password);
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-    res.json({ id: user.id, email: user.email });
+    try {
+        const { email, password } = req.body;
+        if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
+            return res.status(400).json({ error: 'Email and password required' });
+        }
+
+        const users = await getUsers();
+        const user = users.find((u: any) => u.email === email);
+        if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+
+        // Handle old plain-text users gracefully or enforce hashed comparison
+        const isMatch = user.salt
+            ? user.password === await hashPassword(password, user.salt)
+            : user.password === password; // Temporary fallback for existing users without salt
+
+        if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
+        res.status(200).json({ id: user.id, email: user.email, name: user.name || '', sex: user.sex || 'unspecified', basicPreferences: user.basicPreferences || '' });
+    } catch (e) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
 });
 
 app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));
@@ -101,16 +177,12 @@ const ai = new GoogleGenAI({
 const SYSTEM_INSTRUCTION = `
 You are StyleSense AI, a world-class Visual Style Transition Coach.
 
-UI & COMMUNICATION RULES:
-- CONCISE WRITTEN SUMMARY: Your written analysis (via update_style_insights) MUST be a single, punchy paragraph (max 2 sentences).
-- VOCAL ADVICE: Provide your full, detailed coaching and stylistic reasoning via AUDIO only.
-- VISION ENABLED: Analyze the user's current outfit and posture.
-- GOOGLE SEARCH MANDATORY: For EVERY style suggestion, use 'googleSearch' to find:
-  1. REAL product images (look for direct .jpg/.png links in the search results).
-  2. Direct merchant shop links.
-- VISUAL FOCUS: Provide 6 real-world options using 'generate_style_batch'.
-- IMAGE QUALITY: If you cannot find a direct link, leave 'imageUrl' empty and provide a 'style_keyword'. 
-- PERSONALIZED: Focus on the user's "Target Aesthetic" provided below.
+CORE RULES:
+- VISUAL FOCUS: You must generate real-world style options. If the user asks for a gallery or more items, call 'generate_style_batch' with 5 to 10 items.
+- IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link that you find via Google Search. Do not use example.com links or placeholder links. The generated image and the 'Shop' description must match perfectly. Find a real product image online.
+- GOOGLE SEARCH: Use search to find the latest trends, exact store availability, and real image URLs from Google Shopping, retailers, or fashion blogs.
+- ONE SUMMARY: When updating style insights, keep the "improvements" string EXTREMELY SHORT (1 or 2 sentences max) to fit cleanly in the UI. Speak aloud if you need to say more.
+- PERSONALIZED: Use the specific user's Style Profile and demographics provided below to tailor all suggestions specifically to them (e.g. if they are male, ONLY suggest men's clothing).
 `;
 
 const toolsList = [
@@ -132,7 +204,7 @@ const toolsList = [
       },
       {
         name: 'generate_style_batch',
-        description: 'Generates a batch of 6 styles with verified images.',
+        description: 'Generates a batch of styles with verified images to show the user.',
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -176,10 +248,21 @@ const toolsList = [
 wss.on('connection', async (ws: WebSocket, request) => {
   // Extract userId from URL query params
   const url = new URL(request.url!, `http://${request.headers.host}`);
-  const userId = url.searchParams.get('userId');
+  const rawUserId = url.searchParams.get('userId');
 
-  if (!userId) {
+  if (!rawUserId) {
       console.log('Rejected: No userId provided');
+      ws.close();
+      return;
+  }
+
+  // Basic validation to prevent arbitrary connections or injection
+  const userId = sanitizeId(rawUserId);
+  const users = await getUsers();
+  const user = users.find((u: any) => u.id === userId);
+
+  if (!user) {
+      console.log(`Rejected: Invalid userId connected (${userId})`);
       ws.close();
       return;
   }
@@ -190,6 +273,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
   let myPreferences = (await loadFromPersistence(userId, 'preferences.json', { preferences: '' })).preferences;
   let myCloset = await loadFromPersistence(userId, 'closet.json', []);
   
+  // Find User Demographic
+  const userName = user.name || '';
+  const userSex = user.sex || 'unspecified';
+  const userBasicPreferences = user.basicPreferences || '';
+
   ws.send(JSON.stringify({ toolCallResult: { name: 'get_closet', result: { items: myCloset } } }));
 
   let session: any;
@@ -198,6 +286,16 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
+        // Return exactly what the AI generated, trusting it to provide valid image URLs from Google Search.
+        // If the AI fails to find an image, we still want to show what it *thought* it found, rather than
+        // hardcoding static Unsplash placeholders that cause a mismatch between visual and description.
+        const suggestions = args.options.map((opt: any) => {
+            // As a last-resort fallback to prevent broken images entirely if AI really hallucinates a bad URL:
+            let finalUrl = opt.imageUrl;
+            if (!finalUrl || finalUrl.includes('example.com') || !finalUrl.startsWith('http')) {
+                // We use a generic placeholder service that echoes back the description text as an image,
+                // so the user knows what should be there, rather than a completely unrelated fashion image.
+                finalUrl = `https://placehold.co/600x800/222222/FFFFFF/png?text=${encodeURIComponent(opt.name)}`;
         console.log(`[DEBUG] generate_style_batch for user ${userId} with ${args.options?.length || 0} suggestions.`);
         
         if (!args.options || !Array.isArray(args.options)) {
@@ -238,13 +336,17 @@ wss.on('connection', async (ws: WebSocket, request) => {
   };
 
   try {
+    const contextPrompt =
+      (userName ? `\n\nUSER NAME: ${userName}` : "") +
+      (userSex !== 'unspecified' ? `\n\nUSER SEX/GENDER: ${userSex}` : "") +
+      (userBasicPreferences ? `\n\nUSER BASIC PREFERENCES: ${userBasicPreferences}` : "") +
+      (myPreferences ? `\n\nCURRENT SESSION STYLE TARGET: ${myPreferences}` : "");
+
     session = await ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-latest',
+      model: 'gemini-2.0-flash-exp',
       config: {
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
-        tools: toolsList,
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-        responseModalities: [Modality.AUDIO]
+        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + contextPrompt }] },
+        tools: toolsList
       },
       callbacks: {
         onopen: () => {
@@ -329,12 +431,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
-            session.sendClientContent({ 
-                turns: [{ role: 'user', parts: [{ text: `CRITICAL INSTRUCTION: My Target Aesthetic has been CHANGED to: "${myPreferences}". FORGET all previous goals. Strictly follow this NEW goal for all future recommendations and visual gallery updates. Acknowledge this change now and update your style batch immediately.` }] }], 
-                turnComplete: true 
-            });
-        } else {
-            session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true });
+            // Let the coach know the focus changed without necessarily needing a generic user message
+            session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: `System Note: The user just changed their current Style Session focus to: ${myPreferences}` }] }], turnComplete: true });
+            return;
         }
       }
     } catch (e) { console.error('WS Message Error:', e); }
