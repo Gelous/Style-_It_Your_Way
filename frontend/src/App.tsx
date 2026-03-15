@@ -33,12 +33,14 @@ const App: React.FC = () => {
   };
 
   const [preferences, setPreferences] = useState('');
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const inspirationInputRef = useRef<HTMLInputElement>(null);
   const currentLookInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const nextStartTime = useRef(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
@@ -52,10 +54,19 @@ const App: React.FC = () => {
   // Initialize camera only when logged in
   useEffect(() => {
     if (!user) return;
+    if (cameraStream) return;
+
     navigator.mediaDevices.getUserMedia({ video: true })
-      .then((stream) => { if (videoRef.current) videoRef.current.srcObject = stream; })
+      .then((stream) => setCameraStream(stream))
       .catch((err) => console.error("Error accessing camera:", err));
-  }, [user]);
+  }, [user, cameraStream]);
+
+  // Re-attach stream to video element when tab changes or stream initializes
+  useEffect(() => {
+    if (activeTab === 'stylist' && videoRef.current && cameraStream) {
+      videoRef.current.srcObject = cameraStream;
+    }
+  }, [activeTab, cameraStream]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,16 +133,32 @@ const App: React.FC = () => {
     };
   }, [user]);
 
-  const disconnect = useCallback(() => { wsRef.current?.close(); }, []);
+  const interruptAI = useCallback(() => {
+    if (audioContextRef.current) {
+      // Stop all actively playing sources in the queue
+      activeSourcesRef.current.forEach(source => {
+        try { source.stop(); } catch(e) {}
+      });
+      activeSourcesRef.current = [];
+      // Reset the start time so new audio starts playing immediately
+      nextStartTime.current = audioContextRef.current.currentTime;
+      // Also send a special message or just let the real-time audio from microphone naturally interrupt Gemini
+      // But clearing the local playback buffer is required so we don't hear stale queued sentences.
+    }
+  }, []);
+
+  const disconnect = useCallback(() => { wsRef.current?.close(); interruptAI(); }, [interruptAI]);
 
   const analyzeNow = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      interruptAI();
       wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery with 6 new suggestions." }));
     }
   };
 
   const handleLike = (item: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      interruptAI();
       wsRef.current.send(JSON.stringify({ text: `I love the "${item.name}" suggestion. Add it to my closet.` }));
     }
   };
@@ -151,6 +178,13 @@ const App: React.FC = () => {
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioCtx.destination);
+
+    // Cleanup reference when audio finishes playing
+    source.onended = () => {
+        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+    };
+    activeSourcesRef.current.push(source);
+
     const now = audioCtx.currentTime;
     if (nextStartTime.current < now) nextStartTime.current = now + 0.1;
     source.start(nextStartTime.current);
@@ -158,6 +192,7 @@ const App: React.FC = () => {
   };
 
   const startRecording = async () => {
+    interruptAI(); // User spoke, cut off AI playback locally immediately
     try {
       // Re-use or create audio context
       if (!audioContextRef.current) {
