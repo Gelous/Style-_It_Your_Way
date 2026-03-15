@@ -2,10 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Mic, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; email: string; sex: string } | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authSex, setAuthSex] = useState('unspecified');
   const [authError, setAuthError] = useState('');
 
   const [activeTab, setActiveTab] = useState('stylist');
@@ -13,7 +14,6 @@ const App: React.FC = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any | null>(null);
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
   
   const [styleGallery, setStyleGallery] = useState<any[]>([]);
   const [feedIndex, setFeedIndex] = useState(0);
@@ -22,7 +22,14 @@ const App: React.FC = () => {
 
   const nextItem = () => {
     if (styleGallery.length > 0) {
-      setFeedIndex((prev) => (prev + 1) % styleGallery.length);
+      setFeedIndex((prev) => {
+        const next = prev + 1;
+        // If we are getting close to the end, ask for more items silently
+        if (next === styleGallery.length - 1 && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ text: "Generate 5 more new style gallery options based on my target goal from Google Shop." }));
+        }
+        return next % styleGallery.length;
+      });
     }
   };
 
@@ -73,10 +80,14 @@ const App: React.FC = () => {
     setAuthError('');
     const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
     try {
+        const payload = authMode === 'signup'
+          ? { email: authEmail, password: authPassword, sex: authSex }
+          : { email: authEmail, password: authPassword };
+
         const res = await fetch(`http://localhost:3001${endpoint}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: authEmail, password: authPassword })
+            body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
@@ -113,7 +124,6 @@ const App: React.FC = () => {
     wsRef.current = ws;
     ws.onopen = () => {
       setIsConnected(true);
-      setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
       if (audioContextRef.current) {
           nextStartTime.current = audioContextRef.current.currentTime;
       }
@@ -121,12 +131,17 @@ const App: React.FC = () => {
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = async (event) => {
       const data = JSON.parse(event.data);
-      if (data.text) setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
       if (data.audio) playAudioChunk(data.audio);
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
         if (name === 'update_style_insights') setInsights(result);
-        if (name === 'generate_style_batch') { setStyleGallery(result.suggestions); setFeedIndex(0); }
+        if (name === 'generate_style_batch') {
+            setStyleGallery(prev => {
+                // If it's empty, set feedIndex to 0. If it's appending, just add.
+                if (prev.length === 0) { setFeedIndex(0); return result.suggestions; }
+                return [...prev, ...result.suggestions];
+            });
+        }
         if (name === 'get_closet') setCloset(result.items);
         if (name === 'add_to_closet') setCloset(prev => [...prev, result.item]);
       }
@@ -244,7 +259,6 @@ const App: React.FC = () => {
           text: `[User uploaded a ${type.replace('_', ' ')} image]`,
           realtimeInput: { mediaChunks: [{ mimeType: file.type, data: base64 }] }
         }));
-        setMessages(prev => [...prev, { role: 'system', text: `Uploaded ${type.replace('_', ' ')}` }]);
       };
       reader.readAsDataURL(file);
     }
@@ -281,6 +295,21 @@ const App: React.FC = () => {
               />
             </div>
             
+            {authMode === 'signup' && (
+              <div className="relative group">
+                <UserCircle className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
+                <select
+                  value={authSex} onChange={(e) => setAuthSex(e.target.value)}
+                  className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm text-neutral-400 appearance-none"
+                >
+                  <option value="unspecified">Prefer not to say</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="non-binary">Non-binary</option>
+                </select>
+              </div>
+            )}
+
             {authError && <p className="text-red-500 text-xs text-center font-medium bg-red-500/10 py-2 rounded-lg">{authError}</p>}
 
             <button type="submit" className="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-neutral-200 transition-all shadow-xl shadow-white/5 flex items-center justify-center gap-2 mt-6">
@@ -381,12 +410,9 @@ const App: React.FC = () => {
               <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
                 <h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice Summary</h3>
                 <div className="flex flex-col gap-3 text-sm">
-                  <p className="font-medium leading-relaxed">{insights.improvements || 'Coach is watching your feed...'}</p>
+                  <p className="font-medium leading-relaxed">{insights.improvements || 'Coach is analyzing your style and speaking aloud...'}</p>
                   <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
                 </div>
-              </div>
-              <div className="flex-1 flex flex-col rounded-3xl bg-neutral-900/40 border border-neutral-800 overflow-hidden">
-                <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">{messages.map((m, i) => <div key={i} className={`p-4 rounded-2xl text-sm max-w-[90%] ${m.role === 'ai' ? 'bg-neutral-800 text-white self-start' : m.role === 'system' ? 'text-neutral-500 text-center italic text-xs w-full' : 'bg-purple-600 text-white self-end'}`}>{m.text}</div>)}</div>
               </div>
             </div>
 

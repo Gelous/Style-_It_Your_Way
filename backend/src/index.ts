@@ -110,7 +110,7 @@ async function hashPassword(password: string, salt: string) {
 // Auth Endpoints
 app.post('/api/signup', async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, sex } = req.body;
         if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
         const users = await getUsers();
@@ -118,10 +118,10 @@ app.post('/api/signup', async (req, res) => {
 
         const salt = crypto.randomBytes(16).toString('hex');
         const hashedPassword = await hashPassword(password, salt);
-        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt };
+        const newUser = { id: 'user_' + Date.now(), email, password: hashedPassword, salt, sex: sex || 'unspecified' };
         users.push(newUser);
         await saveUsers(users);
-        res.status(201).json({ id: newUser.id, email: newUser.email });
+        res.status(201).json({ id: newUser.id, email: newUser.email, sex: newUser.sex });
     } catch (e) {
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -142,7 +142,7 @@ app.post('/api/login', async (req, res) => {
             : user.password === password; // Temporary fallback for existing users without salt
 
         if (!isMatch) return res.status(401).json({ error: 'Invalid credentials' });
-        res.status(200).json({ id: user.id, email: user.email });
+        res.status(200).json({ id: user.id, email: user.email, sex: user.sex || 'unspecified' });
     } catch (e) {
         res.status(500).json({ error: 'Internal server error' });
     }
@@ -160,11 +160,11 @@ const SYSTEM_INSTRUCTION = `
 You are StyleSense AI, a world-class Visual Style Transition Coach.
 
 CORE RULES:
-- VISUAL FOCUS: You must provide 6 real-world style options.
+- VISUAL FOCUS: You must generate real-world style options. If the user asks for a gallery or more items, call 'generate_style_batch' with 5 to 10 items.
 - IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link that you find via Google Search. Do not use example.com links or placeholder links. The generated image and the 'Shop' description must match perfectly. Find a real product image online.
-- GOOGLE SEARCH: Use search to find the latest trends, exact store availability, and real image URLs (e.g. from retailers, Pinterest, Instagram public posts, or fashion blogs).
+- GOOGLE SEARCH: Use search to find the latest trends, exact store availability, and real image URLs from Google Shopping, retailers, or fashion blogs.
 - ONE SUMMARY: provide a single high-level advice report.
-- PERSONALIZED: Use the specific user's Style Profile provided below.
+- PERSONALIZED: Use the specific user's Style Profile and demographics provided below to tailor all suggestions specifically to them (e.g. if they are male, ONLY suggest men's clothing).
 `;
 
 const toolsList = [
@@ -186,7 +186,7 @@ const toolsList = [
       },
       {
         name: 'generate_style_batch',
-        description: 'Generates a batch of 6 styles with verified images.',
+        description: 'Generates a batch of styles with verified images to show the user.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -242,6 +242,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
   let myPreferences = (await loadFromPersistence(userId, 'preferences.json', { preferences: '' })).preferences;
   let myCloset = await loadFromPersistence(userId, 'closet.json', []);
   
+  // Find User Demographic
+  const users = await getUsers();
+  const user = users.find((u: any) => u.id === userId);
+  const userSex = user?.sex || 'unspecified';
+
   ws.send(JSON.stringify({ toolCallResult: { name: 'get_closet', result: { items: myCloset } } }));
 
   let session: any;
@@ -275,12 +280,10 @@ wss.on('connection', async (ws: WebSocket, request) => {
 
   try {
     session = await ai.live.connect({
-      model: 'models/gemini-2.0-flash-exp',
+      model: 'gemini-2.0-flash-exp',
       config: {
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
-        tools: toolsList,
-        generationConfig: { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } } },
-        responseModalities: ['AUDIO']
+        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + (userSex !== 'unspecified' ? `\n\nUSER SEX/GENDER: ${userSex}` : "") + (myPreferences ? `\n\nUSER TARGET STYLE PROFILE: ${myPreferences}` : "") }] },
+        tools: toolsList
       },
       callbacks: {
         onopen: () => {
@@ -341,6 +344,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
+            // Let the coach know the focus changed without necessarily needing a generic user message
+            session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: `System Note: The user just changed their current Style Session focus to: ${myPreferences}` }] }], turnComplete: true });
+            return;
         }
         session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true });
       }
