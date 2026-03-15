@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type, Modality } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 import path from 'path';
@@ -171,7 +171,8 @@ app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));
 
 // Global AI Setup
 const ai = new GoogleGenAI({ 
-    apiKey: process.env.GOOGLE_API_KEY!
+    apiKey: process.env.GOOGLE_API_KEY,
+    httpOptions: { apiVersion: 'v1beta' }
 });
 
 const SYSTEM_INSTRUCTION = `
@@ -186,41 +187,39 @@ CORE RULES:
 `;
 
 const toolsList = [
-  { 
-    googleSearch: {},
+  { googleSearch: {} },
+  {
     functionDeclarations: [
       {
         name: 'update_style_insights',
-        description: 'Updates the visual summary report.',
+        description: 'Updates the summary report.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
-            summary: { type: Type.STRING, description: 'Short 1-2 sentence overview' },
-            top_tip: { type: Type.STRING, description: 'One actionable stylistic tip' },
-            vocal_script: { type: Type.STRING, description: 'The full detailed advice to be spoken' }
+            suggestions: { type: 'STRING' },
+            improvements: { type: 'STRING' },
+            recommendations: { type: 'STRING' }
           },
-          required: ['summary', 'top_tip', 'vocal_script']
+          required: ['suggestions', 'improvements', 'recommendations']
         }
       },
       {
         name: 'generate_style_batch',
         description: 'Generates a batch of styles with verified images to show the user.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
             options: {
-              type: Type.ARRAY,
+              type: 'ARRAY',
               items: {
-                type: Type.OBJECT,
+                type: 'OBJECT',
                 properties: {
-                  name: { type: Type.STRING },
-                  reason: { type: Type.STRING },
-                  retailers: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  imageUrl: { type: Type.STRING },
-                  style_keyword: { type: Type.STRING, description: 'Keywords to find this style on Unsplash if link fails (e.g. "minimalist beige coat")' },
-                  shop_url: { type: Type.STRING, description: 'Direct link to Google Shopping results for this item' }
+                  name: { type: 'STRING' },
+                  reason: { type: 'STRING' },
+                  retailers: { type: 'ARRAY', items: { type: 'STRING' } },
+                  imageUrl: { type: 'STRING' }
                 },
-                required: ['name', 'reason', 'retailers', 'imageUrl', 'style_keyword', 'shop_url']
+                required: ['name', 'reason', 'retailers', 'imageUrl']
               }
             }
           },
@@ -231,12 +230,12 @@ const toolsList = [
         name: 'add_to_closet',
         description: 'Adds item to closet.',
         parameters: {
-          type: Type.OBJECT,
+          type: 'OBJECT',
           properties: {
-            name: { type: Type.STRING },
-            description: { type: Type.STRING },
-            imageUrl: { type: Type.STRING },
-            retailers: { type: Type.ARRAY, items: { type: Type.STRING } }
+            name: { type: 'STRING' },
+            description: { type: 'STRING' },
+            imageUrl: { type: 'STRING' },
+            retailers: { type: 'ARRAY', items: { type: 'STRING' } }
           },
           required: ['name', 'description', 'imageUrl', 'retailers']
         }
@@ -296,35 +295,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
                 // We use a generic placeholder service that echoes back the description text as an image,
                 // so the user knows what should be there, rather than a completely unrelated fashion image.
                 finalUrl = `https://placehold.co/600x800/222222/FFFFFF/png?text=${encodeURIComponent(opt.name)}`;
-        console.log(`[DEBUG] generate_style_batch for user ${userId} with ${args.options?.length || 0} suggestions.`);
-        
-        if (!args.options || !Array.isArray(args.options)) {
-            console.error("!!! generate_style_batch: Invalid or empty options received.");
-            return { suggestions: [] };
-        }
-
-        // Parallel processing for faster response
-        const suggestions = await Promise.all(args.options.map(async (opt: any, i: number) => {
-            let finalUrl = opt.imageUrl;
-            const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
-            
-            // If the model didn't provide a shop_url, we generate a Google Shopping link
-            const shopUrl = opt.shop_url || `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(opt.name)}`;
-
-            const isPlaceholder = !finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15 || !finalUrl.startsWith('http');
-            
-            console.log(`  [Sugg ${i}] name: ${opt.name}, original_url: ${finalUrl}, isPlaceholder: ${isPlaceholder}`);
-
-            if (isPlaceholder) {
-                // Use Pollinations.ai for high-quality, prompt-matched fashion images.
-                // This ensures the preview matches the "Shop" keyword (e.g. classic beige trench).
-                const prompt = encodeURIComponent(`${opt.style_keyword || opt.name} fashion editorial high quality photography`);
-                finalUrl = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=1000&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
-                console.log(`  [Sugg ${i}] Using Prompt-Matched AI Preview: ${finalUrl}`);
             }
-            
-            return { ...opt, imageUrl: finalUrl, shop_url: shopUrl };
-        }));
+            return { ...opt, imageUrl: finalUrl };
+        });
         return { suggestions };
     },
     add_to_closet: async (args: any) => {
@@ -362,46 +335,28 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          
-          console.log(`[RAW MESSAGE]`, JSON.stringify(message).substring(0, 500)); // Log first 500 chars of raw message
-          
-          if (message.groundingMetadata) {
-            console.log(`[DEBUG] Grounding Metadata:`, JSON.stringify(message.groundingMetadata, null, 2));
-          }
-
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
               if (part.inlineData) ws.send(JSON.stringify({ audio: part.inlineData.data }));
             }
           }
-
           if (message.toolCall) {
-            console.log(`[DEBUG] Tool Call received:`, JSON.stringify(message.toolCall, null, 2));
             const functionResponses = [];
-            const functionCalls = message.toolCall.functionCalls || [];
-            
-            for (const call of functionCalls) {
+            for (const call of message.toolCall.functionCalls) {
               const toolFunc = toolHandlers[call.name];
               if (toolFunc) {
-                try {
-                    const result = await toolFunc(call.args);
-                    ws.send(JSON.stringify({ toolCallResult: { name: call.name, result } }));
-                    functionResponses.push({ id: call.id, name: call.name, response: result });
-                } catch (err) {
-                    console.error(`Error executing tool ${call.name}:`, err);
-                    functionResponses.push({ id: call.id, name: call.name, response: { error: "Execution failed" } });
-                }
+                const result = await toolFunc(call.args);
+                ws.send(JSON.stringify({ toolCallResult: { name: call.name, result } }));
+                functionResponses.push({ id: call.id, name: call.name, response: result });
               }
             }
             if (functionResponses.length > 0) session.sendToolResponse({ functionResponses });
           }
         },
-        onerror: (error: any) => {
-            console.error('!!! Gemini Error:', JSON.stringify(error, null, 2) || error);
-        },
+        onerror: (error: any) => console.error('!!! Gemini Error:', error),
         onclose: (event: any) => {
-          console.log(`--- Gemini Closed for ${userId} --- Code: ${event.code}`, event.reason ? `Reason: ${event.reason}` : '');
+          console.log(`--- Gemini Closed for ${userId} --- Code:`, event.code);
           if (ws.readyState === WebSocket.OPEN) ws.close();
         }
       }
@@ -416,15 +371,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
-        if (data.realtimeInput.audio) {
-            session.sendRealtimeInput({ audio: data.realtimeInput.audio });
-        } else if (data.realtimeInput.video) {
-            session.sendRealtimeInput({ video: data.realtimeInput.video });
-        } else if (data.realtimeInput.mediaChunks) {
-            for (const chunk of data.realtimeInput.mediaChunks) {
-                if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: chunk });
-                else session.sendRealtimeInput({ video: chunk });
-            }
+        for (const chunk of data.realtimeInput.mediaChunks) {
+            if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: { data: chunk.data, mimeType: chunk.mimeType } });
+            else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
         }
       } else if (data.text) {
         // Special case: Update Goal command
@@ -435,6 +384,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
             session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: `System Note: The user just changed their current Style Session focus to: ${myPreferences}` }] }], turnComplete: true });
             return;
         }
+        session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true });
       }
     } catch (e) { console.error('WS Message Error:', e); }
   });

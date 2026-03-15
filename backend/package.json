@@ -11,6 +11,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "type": "commonjs",
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
     "@google/genai": "^1.45.0",
