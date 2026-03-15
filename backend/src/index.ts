@@ -95,8 +95,7 @@ app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));
 
 // Global AI Setup
 const ai = new GoogleGenAI({ 
-    apiKey: process.env.GOOGLE_API_KEY!,
-    httpOptions: { apiVersion: 'v1beta' }
+    apiKey: process.env.GOOGLE_API_KEY!
 });
 
 const SYSTEM_INSTRUCTION = `
@@ -261,6 +260,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
+          
+          console.log(`[RAW MESSAGE]`, JSON.stringify(message).substring(0, 500)); // Log first 500 chars of raw message
           
           if (message.groundingMetadata) {
             console.log(`[DEBUG] Grounding Metadata:`, JSON.stringify(message.groundingMetadata, null, 2));
