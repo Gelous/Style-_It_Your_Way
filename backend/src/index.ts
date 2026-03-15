@@ -197,25 +197,17 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
-        const suggestions = args.options.map((opt: any) => {
+        // Parallel processing for faster response
+        const suggestions = await Promise.all(args.options.map(async (opt: any) => {
             let finalUrl = opt.imageUrl;
-            
             const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
-            
-            // Detect placeholder or invalid URLs
-            const isPlaceholder = !finalUrl || 
-                                finalUrl.includes('example.com') || 
-                                finalUrl.length < 15 || 
-                                !finalUrl.startsWith('http');
+            const isPlaceholder = !finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15 || !finalUrl.startsWith('http');
             
             if (isPlaceholder) {
-                // Use LoremFlickr for high-quality, keyword-matched fashion images
-                // Add a random lock to bypass caching and get more variety
                 finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all?lock=${Math.floor(Math.random() * 1000000)}`;
             }
-            
             return { ...opt, imageUrl: finalUrl };
-        });
+        }));
         return { suggestions };
     },
     add_to_closet: async (args: any) => {
