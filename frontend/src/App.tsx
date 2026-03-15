@@ -89,6 +89,33 @@ const App: React.FC = () => {
     localStorage.removeItem('styleSenseUser');
   };
 
+  const playAudio = useCallback(async (base64Data: string) => {
+    if (!audioContextRef.current) return;
+    try {
+        const binaryString = window.atob(base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+        
+        // Gemini Live usually sends 16-bit Mono PCM @ 24kHz
+        const floatData = new Float32Array(bytes.length / 2);
+        for (let i = 0; i < floatData.length; i++) {
+            const int16 = (bytes[i * 2 + 1] << 8) | bytes[i * 2];
+            floatData[i] = (int16 >= 0x8000 ? int16 - 0x10000 : int16) / 32768.0;
+        }
+
+        const audioBuffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
+        audioBuffer.getChannelData(0).set(floatData);
+
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContextRef.current.destination);
+
+        const startTime = Math.max(nextStartTime.current, audioContextRef.current.currentTime);
+        source.start(startTime);
+        nextStartTime.current = startTime + audioBuffer.duration;
+    } catch (err) { console.error("Error playing audio:", err); }
+  }, []);
+
   const connect = useCallback(() => {
     if (!user) return;
     const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
