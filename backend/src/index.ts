@@ -107,7 +107,7 @@ CORE RULES:
 - VISUAL FEEDBACK: Start by describing what you see. ("I see you're wearing a navy blazer...")
 - STYLE TRANSITION: Guide the user from their current look to their "Target Aesthetic".
 - VISUAL FOCUS: You must provide 6 real-world style options using 'generate_style_batch'.
-- IMAGE SELECTION: Your 'imageUrl' MUST be a high-quality, direct fashion image link.
+- IMAGE SELECTION: Your 'style_keyword' MUST be extremely descriptive (e.g., "men's charcoal overcoat slim fit", "bohemian floral maxi dress summer"). This is used to fetch the preview image.
 - GOOGLE SEARCH: Use search to find the latest trends and store availability.
 - INTERACTIVE: Be encouraging, observant, and proactive. If the user moves or changes something, acknowledge it.
 - PERSONALIZED: Use the specific user's Style Profile provided below.
@@ -199,6 +199,9 @@ wss.on('connection', async (ws: WebSocket, request) => {
     generate_style_batch: async (args: any) => {
         const suggestions = args.options.map((opt: any) => {
             let finalUrl = opt.imageUrl;
+            
+            const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
+            
             // Detect placeholder or invalid URLs
             const isPlaceholder = !finalUrl || 
                                 finalUrl.includes('example.com') || 
@@ -206,20 +209,10 @@ wss.on('connection', async (ws: WebSocket, request) => {
                                 !finalUrl.startsWith('http');
             
             if (isPlaceholder) {
-                // Use a dynamic fallback based on the keyword provided by the AI
-                const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
-                // Construct a URL that uses Unsplash search keywords
-                finalUrl = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop&q=60&ixlib=rb-4.0.3&fashion=${keyword}`;
-                
-                // If we don't even have a keyword, use a random one from our pool
-                if (!opt.style_keyword) {
-                   const fallbacks = [
-                    '1515886657613-9f3515b0c78f', '1434389677669-e08b4cac3105', '1591047139829-d91aecb6caea',
-                    '1552374196-1ab2a1c593e8', '1594938298603-c8148c4dae35', '1539109136881-3be0616bc469'
-                   ];
-                   finalUrl = `https://images.unsplash.com/photo-${fallbacks[Math.floor(Math.random() * fallbacks.length)]}?q=80&w=800&auto=format`;
-                }
+                // Use LoremFlickr for high-quality, keyword-matched fashion images
+                finalUrl = `https://loremflickr.com/800/1000/fashion,${keyword}/all`;
             }
+            
             return { ...opt, imageUrl: finalUrl };
         });
         return { suggestions };
