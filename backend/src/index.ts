@@ -147,9 +147,10 @@ const toolsList = [
                   reason: { type: Type.STRING },
                   retailers: { type: Type.ARRAY, items: { type: Type.STRING } },
                   imageUrl: { type: Type.STRING },
-                  style_keyword: { type: Type.STRING, description: 'Keywords to find this style on Unsplash if link fails (e.g. "minimalist beige coat")' }
+                  style_keyword: { type: Type.STRING, description: 'Keywords to find this style on Unsplash if link fails (e.g. "minimalist beige coat")' },
+                  shop_url: { type: Type.STRING, description: 'Direct link to Google Shopping results for this item' }
                 },
-                required: ['name', 'reason', 'retailers', 'imageUrl', 'style_keyword']
+                required: ['name', 'reason', 'retailers', 'imageUrl', 'style_keyword', 'shop_url']
               }
             }
           },
@@ -211,17 +212,24 @@ wss.on('connection', async (ws: WebSocket, request) => {
             let finalUrl = opt.imageUrl;
             const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
             
+            // If the model didn't provide a shop_url, we generate a Google Shopping link
+            const shopUrl = opt.shop_url || `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(opt.name)}`;
+
             const isPlaceholder = !finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15 || !finalUrl.startsWith('http');
             
-            console.log(`  [Sugg ${i}] name: ${opt.name}, keyword: ${opt.style_keyword}, original_url: ${finalUrl}, isPlaceholder: ${isPlaceholder}`);
+            console.log(`  [Sugg ${i}] name: ${opt.name}, original_url: ${finalUrl}, isPlaceholder: ${isPlaceholder}`);
 
             if (isPlaceholder) {
-                // Use Pollinations.ai for high-quality, prompt-matched fashion images.
-                const prompt = encodeURIComponent(`${opt.style_keyword || opt.name} fashion editorial professional photography high resolution`);
-                finalUrl = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=1000&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
-                console.log(`  [Sugg ${i}] Using AI-Generated Fallback: ${finalUrl}`);
+                // Use high-quality fashion images that are known to be embeddable (Unsplash with specific IDs)
+                const fashionIds = [
+                    '1515886657613-9f3515b0c78f', '1434389677669-e08b4cac3105', '1591047139829-d91aecb6caea',
+                    '1552374196-1ab2a1c593e8', '1594938298603-c8148c4dae35', '1539109136881-3be0616bc469'
+                ];
+                finalUrl = `https://images.unsplash.com/photo-${fashionIds[i % fashionIds.length]}?q=80&w=800&auto=format&fit=crop`;
+                console.log(`  [Sugg ${i}] Using Reliable Unsplash ID: ${finalUrl}`);
             }
-            return { ...opt, imageUrl: finalUrl };
+            
+            return { ...opt, imageUrl: finalUrl, shop_url: shopUrl };
         }));
         return { suggestions };
     },

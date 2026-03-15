@@ -410,13 +410,20 @@ const App: React.FC = () => {
                         <button onClick={nextItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronDown className="w-6 h-6" /></button>
                     </div>
                     <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between bg-gradient-to-t from-black/80 to-transparent p-6 rounded-b-2xl">
-                        <div className="max-w-[70%]">
+                        <div className="max-w-[60%]">
                             <h4 className="text-xl font-bold text-white mb-1">{styleGallery[feedIndex].name}</h4>
                             <p className="text-xs text-neutral-300 line-clamp-2">{styleGallery[feedIndex].reason}</p>
                         </div>
-                        <div className="flex gap-3">
-                            <button onClick={() => handleLike(styleGallery[feedIndex])} className="p-4 bg-white rounded-full hover:scale-110 transition shadow-xl"><Heart className="w-6 h-6 text-pink-500 fill-current" /></button>
-                            <button onClick={() => setSelectedItem(styleGallery[feedIndex])} className="p-4 bg-purple-600 rounded-full hover:scale-110 transition shadow-xl"><Store className="w-6 h-6 text-white" /></button>
+                        <div className="flex gap-2">
+                            <button onClick={() => handleLike(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-pink-500/20 transition group border border-white/10"><Heart className="w-5 h-5 text-white group-hover:text-pink-500 transition" /></button>
+                            <button 
+                                onClick={() => window.open(styleGallery[feedIndex].shop_url, '_blank')}
+                                className="px-4 py-3 bg-purple-600 text-white rounded-2xl hover:bg-purple-500 transition shadow-xl flex items-center gap-2 border border-purple-400/20"
+                            >
+                                <ShoppingBag className="w-5 h-5" />
+                                <span className="text-[10px] font-bold uppercase tracking-widest">Shop</span>
+                            </button>
+                            <button onClick={() => setSelectedItem(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-white/20 transition border border-white/10"><Store className="w-5 h-5 text-white" /></button>
                         </div>
                     </div>
                   </div>
