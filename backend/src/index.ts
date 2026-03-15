@@ -144,9 +144,10 @@ const toolsList = [
                   name: { type: Type.STRING },
                   reason: { type: Type.STRING },
                   retailers: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  imageUrl: { type: Type.STRING }
+                  imageUrl: { type: Type.STRING },
+                  style_keyword: { type: Type.STRING, description: 'Keywords to find this style on Unsplash if link fails (e.g. "minimalist beige coat")' }
                 },
-                required: ['name', 'reason', 'retailers', 'imageUrl']
+                required: ['name', 'reason', 'retailers', 'imageUrl', 'style_keyword']
               }
             }
           },
@@ -196,13 +197,28 @@ wss.on('connection', async (ws: WebSocket, request) => {
   const toolHandlers: Record<string, Function> = {
     update_style_insights: async (args: any) => args,
     generate_style_batch: async (args: any) => {
-        const suggestions = args.options.map((opt: any, i: number) => {
+        const suggestions = args.options.map((opt: any) => {
             let finalUrl = opt.imageUrl;
-            if (!finalUrl || finalUrl.includes('example.com') || finalUrl.length < 15) {
-                finalUrl = `https://images.unsplash.com/photo-${[
+            // Detect placeholder or invalid URLs
+            const isPlaceholder = !finalUrl || 
+                                finalUrl.includes('example.com') || 
+                                finalUrl.length < 15 || 
+                                !finalUrl.startsWith('http');
+            
+            if (isPlaceholder) {
+                // Use a dynamic fallback based on the keyword provided by the AI
+                const keyword = encodeURIComponent(opt.style_keyword || opt.name || 'fashion');
+                // Construct a URL that uses Unsplash search keywords
+                finalUrl = `https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?q=80&w=800&auto=format&fit=crop&q=60&ixlib=rb-4.0.3&fashion=${keyword}`;
+                
+                // If we don't even have a keyword, use a random one from our pool
+                if (!opt.style_keyword) {
+                   const fallbacks = [
                     '1515886657613-9f3515b0c78f', '1434389677669-e08b4cac3105', '1591047139829-d91aecb6caea',
                     '1552374196-1ab2a1c593e8', '1594938298603-c8148c4dae35', '1539109136881-3be0616bc469'
-                ][i % 6]}?q=80&w=800&auto=format`;
+                   ];
+                   finalUrl = `https://images.unsplash.com/photo-${fallbacks[Math.floor(Math.random() * fallbacks.length)]}?q=80&w=800&auto=format`;
+                }
             }
             return { ...opt, imageUrl: finalUrl };
         });
