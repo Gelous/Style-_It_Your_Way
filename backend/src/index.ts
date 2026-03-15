@@ -244,11 +244,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
   let myPreferences = (await loadFromPersistence(userId, 'preferences.json', { preferences: '' })).preferences;
   let myCloset = await loadFromPersistence(userId, 'closet.json', []);
   
-<<<<<<< HEAD
-  const contextPrompt = 
-=======
   const contextPrompt =
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
     `USER NAME: ${user.name || 'User'}\nUSER SEX: ${user.sex || 'unspecified'}\nUSER BASIC PREFS: ${user.basicPreferences || ''}\n` +
     (myPreferences ? `\nCURRENT SESSION STYLE TARGET: ${myPreferences}` : "");
 
@@ -287,11 +283,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
         systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION + "\n\n" + contextPrompt }] },
         tools: toolsList,
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } },
-<<<<<<< HEAD
-        responseModalities: ['audio']
-=======
         responseModalities: ['AUDIO']
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
       },
       callbacks: {
         onopen: () => {
@@ -299,11 +291,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
             setTimeout(() => {
                 if (session) {
                     session.sendClientContent({ 
-<<<<<<< HEAD
                         turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }], 
-=======
-                        turns: [{ role: 'user', parts: [{ text: "Coach, please analyze my look and update the style gallery." }] }],
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
+                      main
                         turnComplete: true 
                     });
                 }
@@ -311,11 +300,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-<<<<<<< HEAD
-          
-=======
-
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
+          main
           if (message.serverContent?.modelTurn) {
             for (const part of message.serverContent.modelTurn.parts) {
               if (part.text) ws.send(JSON.stringify({ text: part.text }));
@@ -351,10 +336,6 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
-<<<<<<< HEAD
-        if (data.realtimeInput.audio) session.sendRealtimeInput({ audio: data.realtimeInput.audio });
-        else if (data.realtimeInput.video) session.sendRealtimeInput({ video: data.realtimeInput.video });
-=======
         // Fallback to original working format or whatever frontend sends
         if (data.realtimeInput.mediaChunks) {
             for (const chunk of data.realtimeInput.mediaChunks) {
@@ -362,20 +343,14 @@ wss.on('connection', async (ws: WebSocket, request) => {
                 else session.sendRealtimeInput({ media: { data: chunk.data, mimeType: chunk.mimeType } });
             }
         }
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
+origin/fix/security-and-robustness-2686056288197952117
       } else if (data.text) {
         if (data.text.startsWith("Update Goal: ")) {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
-<<<<<<< HEAD
-            session.sendClientContent({ 
-                turns: [{ role: 'user', parts: [{ text: `CRITICAL: My Target Aesthetic is now: "${myPreferences}". Forget previous goals and update gallery.` }] }], 
-                turnComplete: true 
-=======
             session.sendClientContent({
                 turns: [{ role: 'user', parts: [{ text: `CRITICAL: My Target Aesthetic is now: "${myPreferences}". Forget previous goals and update gallery.` }] }],
                 turnComplete: true
->>>>>>> origin/fix/security-and-robustness-2686056288197952117
             });
         } else { session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: data.text }] }], turnComplete: true }); }
       }
