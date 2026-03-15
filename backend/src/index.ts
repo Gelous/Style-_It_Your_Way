@@ -307,7 +307,7 @@ wss.on('connection', async (ws: WebSocket, request) => {
             myPreferences = data.text.replace("Update Goal: ", "");
             await saveToPersistence(userId, 'preferences.json', { preferences: myPreferences });
             session.sendClientContent({ 
-                turns: [{ role: 'user', parts: [{ text: `SYSTEM NOTE: My Target Aesthetic has been updated to: "${myPreferences}". Please acknowledge and adjust your advice.` }] }], 
+                turns: [{ role: 'user', parts: [{ text: `CRITICAL INSTRUCTION: My Target Aesthetic has been CHANGED to: "${myPreferences}". FORGET all previous goals. Strictly follow this NEW goal for all future recommendations and visual gallery updates. Acknowledge this change now and update your style batch immediately.` }] }], 
                 turnComplete: true 
             });
         } else {

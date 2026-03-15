@@ -165,6 +165,15 @@ const App: React.FC = () => {
     }
   };
 
+  const clearSession = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ text: "CLEAR CONTEXT: Forget our previous conversation and start fresh with my current Target Aesthetic." }));
+    }
+    setMessages([]);
+    setStyleGallery([]);
+    setInsights({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
+  };
+
   const handleLike = (item: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ text: `I love the "${item.name}" suggestion. Add it to my closet.` }));
@@ -328,6 +337,7 @@ const App: React.FC = () => {
           <div className="grid grid-cols-2 gap-2">
             {!isConnected ? <button onClick={connect} className="col-span-2 bg-white text-black py-3 rounded-xl font-bold hover:bg-neutral-200 transition">START</button> : <button onClick={() => wsRef.current?.close()} className="col-span-2 bg-red-500/10 text-red-500 border border-red-500/20 py-3 rounded-xl font-bold">STOP</button>}
             <button onClick={analyzeNow} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-purple-600/20 text-purple-400 border border-purple-500/20 hover:bg-purple-600/30'}`}><RefreshCw className={`w-4 h-4 ${isConnected ? 'animate-spin-slow' : ''}`} /><span className="text-xs font-bold uppercase">Analyze My Look</span></button>
+            <button onClick={clearSession} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'}`}><X className="w-4 h-4" /><span className="text-xs font-bold uppercase">Clear Chat</span></button>
             <input type="file" ref={inspirationInputRef} onChange={(e) => handleFileUpload(e, 'inspiration')} accept="image/*" className="hidden" />
             <button onClick={() => inspirationInputRef.current?.click()} disabled={!isConnected} className={`p-3 rounded-xl transition flex flex-col items-center gap-1 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-neutral-800 text-purple-400 hover:bg-neutral-700'}`}><ImageIcon className="w-5 h-5" /><span className="text-[10px] font-bold uppercase">Inspo</span></button>
             <input type="file" ref={currentLookInputRef} onChange={(e) => handleFileUpload(e, 'current_look')} accept="image/*" className="hidden" />
