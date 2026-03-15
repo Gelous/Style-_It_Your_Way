@@ -173,14 +173,11 @@ const App: React.FC = () => {
     const interval = setInterval(() => {
       if (videoRef.current && ctx && wsRef.current?.readyState === WebSocket.OPEN) {
         const video = videoRef.current;
-        const size = Math.min(video.videoWidth, video.videoHeight) || 640;
-        canvas.width = size;
-        canvas.height = size;
+        // Use full video dimensions to avoid cropping
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
         
-        const startX = (video.videoWidth - size) / 2;
-        const startY = (video.videoHeight - size) / 2;
-        
-        ctx.drawImage(video, startX, startY, size, size, 0, 0, size, size);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         
         wsRef.current.send(JSON.stringify({
@@ -387,7 +384,7 @@ const App: React.FC = () => {
           <div className="flex-1 flex gap-6 p-8 overflow-hidden relative">
             <div className="flex-1 flex flex-col gap-6 relative">
               <div className="relative h-[500px] rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
-                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1] brightness-110 contrast-105" />
+                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain transform scale-x-[-1]" />
                 <div className={`absolute top-6 left-6 flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full text-[10px] font-bold ${isConnected ? 'text-white' : 'text-neutral-500'}`}><div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-neutral-700'}`} /> {isConnected ? 'LIVE' : 'INACTIVE'}</div>
               </div>
               
