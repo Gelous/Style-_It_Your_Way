@@ -3,7 +3,8 @@ import {
   Camera, Shirt, Sparkles, ShoppingBag, 
   LayoutGrid, TrendingUp, PlusCircle, Image as ImageIcon, 
   UserCircle, RefreshCw, Heart, ExternalLink, X, 
-  Settings, Eye, LogOut, Trash2, Globe, Clock, Shield, Bell
+  Settings, Eye, LogOut, Trash2, Globe, Clock, Shield, Bell,
+  Mic, MicOff
 } from 'lucide-react';
 import './App.css';
 
@@ -80,8 +81,71 @@ const App: React.FC = () => {
   const currentLookInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   const [tempPreferences, setTempPreferences] = useState('');
+
+  // Audio Capture (Mic to AI)
+  const startMic = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+      setIsMicActive(true);
+
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      await audioCtx.audioWorklet.addModule('/mic-processor.js');
+      
+      const source = audioCtx.createMediaStreamSource(stream);
+      const workletNode = new AudioWorkletNode(audioCtx, 'mic-processor');
+
+      workletNode.port.onmessage = (e) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          const inputData = e.data;
+          
+          // Simple Voice Activity Check (VAD)
+          let sum = 0;
+          for (let i = 0; i < inputData.length; i++) sum += Math.abs(inputData[i]);
+          const average = sum / inputData.length;
+          
+          // If user starts talking, stop current AI audio playback (Interruption)
+          if (average > 0.015 && audioSourceRef.current) {
+              audioSourceRef.current.stop();
+              audioSourceRef.current = null;
+          }
+
+          // Convert Int16 PCM to Base64 reliably
+          const uint8 = new Uint8Array(pcm16.buffer);
+          let binary = '';
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          const base64 = btoa(binary);
+
+          wsRef.current.send(JSON.stringify({
+            realtimeInput: { mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: base64 }] }
+          }));
+        }
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
+      
+      (window as any).styleSenseMicNode = workletNode;
+      (window as any).styleSenseMicContext = audioCtx;
+    } catch (err) {
+      console.error("Mic access denied:", err);
+    }
+  };
+
+  const stopMic = () => {
+    micStreamRef.current?.getTracks().forEach(t => t.stop());
+    micStreamRef.current = null;
+    setIsMicActive(false);
+    if ((window as any).styleSenseMicNode) {
+        (window as any).styleSenseMicNode.disconnect();
+        (window as any).styleSenseMicContext.close();
+    }
+  };
 
   // --- Core Lifecycle ---
 
@@ -129,9 +193,16 @@ const App: React.FC = () => {
     if (savedSessions) {
       const parsed = JSON.parse(savedSessions);
       setSessions(parsed);
-      if (parsed.length > 0) loadSession(parsed[0]);
+      if (parsed.length > 0) {
+        loadSession(parsed[0]);
+        // Override the loaded style to ensure it starts fresh on refresh
+        setPreferences('');
+        setTempPreferences('');
+      }
     } else {
       createNewSession();
+      setPreferences('');
+      setTempPreferences('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -493,6 +564,9 @@ const App: React.FC = () => {
                   />
                 </div>
                 <div className="flex items-center gap-4">
+                  <button onClick={isMicActive ? stopMic : startMic} className={`p-3 rounded-2xl border transition ${isMicActive ? 'bg-red-50 text-red-500 border-red-100 animate-pulse' : 'bg-neutral-50 text-neutral-400 border-neutral-100 hover:text-black'}`}>
+                    {isMicActive ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
                   <button onClick={connect} disabled={isConnected} className={`btn-premium ${isConnected ? 'bg-green-50 text-green-600 border-green-100' : 'btn-secondary'}`}>{isConnected ? 'Connected' : 'Connect AI'}</button>
                   <button onClick={analyzeNow} className="btn-premium btn-primary"><Sparkles className="w-4 h-4" /> Analyze Now</button>
                 </div>

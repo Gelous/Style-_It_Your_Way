@@ -283,14 +283,8 @@ wss.on('connection', async (ws: WebSocket, request) => {
       callbacks: {
         onopen: () => {
             console.log(`--- Gemini Connected for ${userId} ---`);
-            setTimeout(() => {
-                if (session) {
-                    session.sendClientContent({ 
-                        turns: [{ role: 'user', parts: [{ text: "Coach, show me a visual gallery of 6 real-world style options for my Target Goal." }] }], 
-                        turnComplete: true 
-                    });
-                }
-            }, 1000);
+            // We NO LONGER send an automatic prompt here. 
+            // The assistant waits for the user to speak or type.
         },
         onmessage: async (message: any) => {
           if (ws.readyState !== WebSocket.OPEN) return;
@@ -340,13 +334,20 @@ wss.on('connection', async (ws: WebSocket, request) => {
 
   ws.on('message', async (message: string) => {
     try {
+      if (!session) return;
+      
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
         if (data.realtimeInput.mediaChunks) {
-            // Map chunks to the format expected by Multimodal Live API: Part[] with inlineData
-            session.sendRealtimeInput(data.realtimeInput.mediaChunks.map((chunk: any) => ({
-                inlineData: { mimeType: chunk.mimeType, data: chunk.data }
-            })));
+            // The Multimodal Live API expects an array of Part objects. 
+            // We ensure we only send if the session is active.
+            try {
+                session.sendRealtimeInput(data.realtimeInput.mediaChunks.map((chunk: any) => ({
+                    inlineData: { mimeType: chunk.mimeType, data: chunk.data }
+                })));
+            } catch (err) {
+                console.error("[Vision/Audio] Failed to send realtime input:", err);
+            }
         }
       } else if (data.text) {
         // Special case: Update Goal command
