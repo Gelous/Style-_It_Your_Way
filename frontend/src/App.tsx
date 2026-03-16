@@ -81,11 +81,14 @@ const App: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
+  const [tempPreferences, setTempPreferences] = useState('');
+
   // --- Core Lifecycle ---
 
   const loadSession = useCallback((session: StyleSession) => {
     setCurrentSessionId(session.id);
     setPreferences(session.targetStyle);
+    setTempPreferences(session.targetStyle);
     setStyleGallery(session.gallery || []);
     setInsights(session.insights || { suggestions: 'Waiting...' });
     setMessages(session.messages || []);
@@ -107,6 +110,7 @@ const App: React.FC = () => {
     setSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newId);
     setPreferences(newSession.targetStyle);
+    setTempPreferences(newSession.targetStyle);
     setStyleGallery([]);
     setInsights({ suggestions: 'Waiting...' });
     setMessages([]);
@@ -148,12 +152,14 @@ const App: React.FC = () => {
     }
   }, [activeTab, trends.length]);
 
-  const handleStyleChange = (newStyle: string) => {
-    if (messages.length > 2 || styleGallery.length > 0) {
-      setPendingStyle(newStyle);
+  const handleStyleSubmit = () => {
+    if (tempPreferences === preferences || !tempPreferences) return;
+
+    if (messages.length > 1 || styleGallery.length > 0) {
+      setPendingStyle(tempPreferences);
       setShowSavePrompt(true);
     } else {
-      setPreferences(newStyle);
+      setPreferences(tempPreferences);
     }
   };
 
@@ -236,10 +242,13 @@ const App: React.FC = () => {
   // Synchronize Preferences with AI Session
   useEffect(() => {
     if (isConnected && wsRef.current?.readyState === WebSocket.OPEN && preferences) {
-      // Debounce slightly if needed, but for goal updates we want it clear
+      // Clear results immediately for instant feedback
+      setStyleGallery([]);
+      setInsights({ summary: 'Updating for new aesthetic...' });
+      
       const timer = setTimeout(() => {
         wsRef.current?.send(JSON.stringify({ text: `Update Goal: ${preferences}` }));
-      }, 500);
+      }, 300);
       return () => clearTimeout(timer);
     }
   }, [preferences, isConnected]);
@@ -256,13 +265,13 @@ const App: React.FC = () => {
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-            const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+            const base64 = canvas.toDataURL('image/jpeg', 0.4).split(',')[1];
             wsRef.current.send(JSON.stringify({
               realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: base64 }] }
             }));
           }
         }
-      }, 1500);
+      }, 1000); // 1fps for faster vision
     }
     return () => clearInterval(interval);
   }, [isConnected, !!cameraStreamRef.current]);
@@ -276,25 +285,32 @@ const App: React.FC = () => {
     if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     }
-    audioContextRef.current.resume();
+    if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+    }
 
     const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
     wsRef.current = ws;
     ws.onopen = () => {
         setIsConnected(true);
+        console.log("Connected to StyleSense AI Engine");
     };
     ws.onclose = () => setIsConnected(false);
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.text) setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
-      if (data.audio) playPCMChunk(data.audio);
+      if (data.audio) {
+        // Log to verify audio data arrival
+        if (messages.length % 10 === 0) console.log("Receiving audio stream...");
+        playPCMChunk(data.audio);
+      }
       if (data.toolCallResult) {
         const { name, result } = data.toolCallResult;
         if (name === 'update_style_insights') setInsights(result);
         if (name === 'generate_style_batch') setStyleGallery(result.suggestions);
       }
     };
-  }, [user]);
+  }, [user, messages.length]);
 
   const analyzeNow = () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -469,9 +485,10 @@ const App: React.FC = () => {
                   <span className="text-sm font-bold text-neutral-400">Target Style</span>
                   <input 
                     type="text" 
-                    value={preferences} 
-                    onChange={e => handleStyleChange(e.target.value)}
-                    placeholder="Describe your aesthetic..." 
+                    value={tempPreferences} 
+                    onChange={e => setTempPreferences(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleStyleSubmit()}
+                    placeholder="Describe your aesthetic... (Press Enter to set)" 
                     className="flex-1 bg-neutral-50 border border-neutral-100 rounded-2xl py-3.5 px-6 outline-none focus:border-black transition font-semibold"
                   />
                 </div>
