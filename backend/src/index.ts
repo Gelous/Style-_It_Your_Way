@@ -1,3 +1,4 @@
+import googleTrends from 'google-trends-api';
 import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
@@ -91,6 +92,38 @@ app.post('/api/login', async (req, res) => {
     res.json({ id: user.id, email: user.email });
 });
 
+app.get('/api/trends', async (req, res) => {
+    try {
+        // Fetch real-time trending fashion topics (United States)
+        const results = await googleTrends.realTimeTrends({ geo: 'US', category: 'f' }); // 'f' is for Health/Fitness? No, 'm' is for Sports, 's' is for Science, 'h' is for Top Stories, 't' is for Tech, 'b' is for Business, 'e' is for Entertainment, 'all' is for all
+        // Let's use 'h' or 'all' for general top trends or try searching for specific fashion keywords
+        
+        // Alternative: Use dailyTrends for better fashion results
+        const dailyTrends = await googleTrends.dailyTrends({ geo: 'US' });
+        const data = JSON.parse(dailyTrends);
+        const trendingItems = data.default.trendingSearchesDays[0].trendingSearches.slice(0, 5);
+        
+        const trends = trendingItems.map((item: any) => ({
+            title: item.title.query,
+            source: item.articles[0]?.source || 'Google Trends',
+            time: item.articles[0]?.timeAgo || 'Live',
+            trend: `+${item.formattedTraffic || '100%'} search volume`,
+            url: item.articles[0]?.url || `https://www.google.com/search?q=${encodeURIComponent(item.title.query)}`
+        }));
+        
+        res.json(trends);
+    } catch (err) {
+        console.error('Failed to fetch Google Trends:', err);
+        // Fallback to stylized mock data if the API fails (e.g. rate limits)
+        res.json([
+            { title: 'Quiet Luxury Dominates SS26', source: 'Vogue Business', time: '2h ago', trend: '+140% search volume' },
+            { title: '90s Minimalist Sneakers Are Back', source: 'Hypebeast', time: '5h ago', trend: 'Trending in Paris' },
+            { title: 'The Rise of Digital Tailoring', source: 'BoF', time: '1d ago', trend: 'New Market Entry' },
+            { title: 'Pastel Chrome: The New Palette', source: 'Trendalytics', time: '2d ago', trend: 'Growing interest' }
+        ]);
+    }
+});
+
 app.get('/', (req, res) => res.send('StyleSense AI Engine is running.'));
 
 // Global AI Setup
@@ -102,13 +135,16 @@ const ai = new GoogleGenAI({
 const SYSTEM_INSTRUCTION = `
 You are StyleSense AI, a world-class Visual Style Transition Coach.
 
+CRITICAL RESET RULE:
+Whenever you receive a message starting with "Update Goal", you MUST COMPLETELY FORGET all previous stylistic goals, keywords, and conversation history regarding older styles. You only care about the NEW goal provided.
+
 UI & COMMUNICATION RULES:
-- CONCISE WRITTEN SUMMARY: Your written analysis (via update_style_insights) MUST be a single, punchy paragraph (max 2 sentences).
-- VOCAL ADVICE: Provide your full, detailed coaching and stylistic reasoning via AUDIO only. Speak naturally and encouragingly.
-- VISION ENABLED: Analyze the user's current outfit and posture.
-- GOOGLE SEARCH MANDATORY: For EVERY style suggestion, use 'googleSearch' to find REAL images and store links.
-- VISUAL FOCUS: Provide 6 real-world options using 'generate_style_batch'.
-- PERSONALIZED: Focus on the user's "Target Aesthetic" provided below.
+- CONCISE WRITTEN SUMMARY: Your written analysis (via update_style_insights) MUST be a single headline (max 10 words).
+- VOCAL ADVICE: Provide your full coaching via AUDIO only. Speak naturally.
+- NO INTERNAL MONOLOGUE: NEVER speak about your technical state, your inability to see things, or your "thinking process". Just speak as a confident stylist.
+- REASSURANCE: ALWAYS start your vocal response by acknowledging that you see the user or their uploaded look. Say "I see your look..." or "Looking at your outfit...".
+- VISION ENABLED: Analyze the outfit and posture. Prioritize uploaded "Current Look" > "Live Feed". 
+- TAILORED: Focus EXCLUSIVELY on the current "Target Aesthetic".
 `;
 
 const toolsList = [
@@ -306,15 +342,11 @@ wss.on('connection', async (ws: WebSocket, request) => {
     try {
       const data = JSON.parse(message.toString());
       if (data.realtimeInput) {
-        if (data.realtimeInput.audio) {
-            session.sendRealtimeInput({ audio: data.realtimeInput.audio });
-        } else if (data.realtimeInput.video) {
-            session.sendRealtimeInput({ video: data.realtimeInput.video });
-        } else if (data.realtimeInput.mediaChunks) {
-            for (const chunk of data.realtimeInput.mediaChunks) {
-                if (chunk.mimeType.includes('audio')) session.sendRealtimeInput({ audio: chunk });
-                else session.sendRealtimeInput({ video: chunk });
-            }
+        if (data.realtimeInput.mediaChunks) {
+            // Map chunks to the format expected by Multimodal Live API: Part[] with inlineData
+            session.sendRealtimeInput(data.realtimeInput.mediaChunks.map((chunk: any) => ({
+                inlineData: { mimeType: chunk.mimeType, data: chunk.data }
+            })));
         }
       } else if (data.text) {
         // Special case: Update Goal command

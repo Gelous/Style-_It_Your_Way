@@ -1,74 +1,360 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, Mic, MicOff, Play, Square, Shirt, Sparkles, ShoppingBag, LayoutGrid, TrendingUp, Search, PlusCircle, Image as ImageIcon, UserCircle, RefreshCw, Save, Heart, ExternalLink, X, FileText, Store, Globe, Info, ChevronUp, ChevronDown, LogOut, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
+import { 
+  Camera, Shirt, Sparkles, ShoppingBag, 
+  LayoutGrid, TrendingUp, PlusCircle, Image as ImageIcon, 
+  UserCircle, RefreshCw, Heart, ExternalLink, X, 
+  Settings, Eye, LogOut, Trash2, Globe, Clock, Shield, Bell
+} from 'lucide-react';
+import './App.css';
+
+interface StyleItem {
+  name: string;
+  reason: string;
+  imageUrl: string;
+  style_keyword?: string;
+  shop_url?: string;
+  retailers?: string[];
+}
+
+interface StyleInsights {
+  suggestions?: string;
+  summary?: string;
+  improvements?: string;
+  recommendations?: string;
+  top_tip?: string;
+  vocal_script?: string;
+}
+
+interface StyleSession {
+  id: string;
+  name: string;
+  targetStyle: string;
+  currentLook?: string;
+  inspiration?: string;
+  gallery: StyleItem[];
+  insights: StyleInsights;
+  messages: { role: string; text: string }[];
+  timestamp: number;
+}
 
 const App: React.FC = () => {
+  // Auth State
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
-  const [activeTab, setActiveTab] = useState('stylist');
-  const [isConnected, setIsConnected] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [showReport, setShowReport] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<any | null>(null);
-  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  // UI State
+  const [activeTab, setActiveTab] = useState('live');
+  const [rightPanelTab, setRightPanelTab] = useState<'insights' | 'report'>('insights');
   
-  const [styleGallery, setStyleGallery] = useState<any[]>([]);
-  const [feedIndex, setFeedIndex] = useState(0);
-  const [closet, setCloset] = useState<any[]>([]);
-  const [insights, setInsights] = useState({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
+  // Session State
+  const [sessions, setSessions] = useState<StyleSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [showSavePrompt, setShowSavePrompt] = useState(false);
+  const [pendingStyle, setPendingStyle] = useState<string | null>(null);
 
+  // Real-time State
+  const [isConnected, setIsConnected] = useState(false);
+  const [messages, setMessages] = useState<{ role: string; text: string }[]>([]);
+  const [styleGallery, setStyleGallery] = useState<StyleItem[]>([]);
+  const [insights, setInsights] = useState<StyleInsights>({ suggestions: 'Waiting...' });
   const [preferences, setPreferences] = useState('');
+  const [currentLookImg, setCurrentLookImg] = useState<string | null>(null);
+  const [inspirationImg, setInspirationImg] = useState<string | null>(null);
+
+  // Closet State (Grouped by Style Album)
+  const [closet, setCloset] = useState<Record<string, StyleItem[]>>({});
+
+  // Settings State
+  const [notifications, setNotifications] = useState(true);
+  const [privacy, setPrivacy] = useState(false);
+
+  // Trends State
+  const [trends, setTrends] = useState<{title: string, source: string, time: string, trend: string}[]>([]);
+  const [loadingTrends, setLoadingTrends] = useState(false);
+
+  // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
   const inspirationInputRef = useRef<HTMLInputElement>(null);
   const currentLookInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const nextStartTime = useRef(0);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  // Load user from localStorage
+  // --- Core Lifecycle ---
+
+  const loadSession = useCallback((session: StyleSession) => {
+    setCurrentSessionId(session.id);
+    setPreferences(session.targetStyle);
+    setStyleGallery(session.gallery || []);
+    setInsights(session.insights || { suggestions: 'Waiting...' });
+    setMessages(session.messages || []);
+    setCurrentLookImg(session.currentLook || null);
+    setInspirationImg(session.inspiration || null);
+  }, []);
+
+  const createNewSession = useCallback((style?: string) => {
+    const newId = Date.now().toString();
+    const newSession: StyleSession = {
+      id: newId,
+      name: `${style || 'New'} Session`,
+      targetStyle: style || 'Minimalist',
+      gallery: [],
+      insights: { suggestions: 'Waiting...' },
+      messages: [],
+      timestamp: Date.now()
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setCurrentSessionId(newId);
+    setPreferences(newSession.targetStyle);
+    setStyleGallery([]);
+    setInsights({ suggestions: 'Waiting...' });
+    setMessages([]);
+    setCurrentLookImg(null);
+    setInspirationImg(null);
+  }, []);
+
   useEffect(() => {
     const savedUser = localStorage.getItem('styleSenseUser');
     if (savedUser) setUser(JSON.parse(savedUser));
+
+    const savedCloset = localStorage.getItem('styleSenseClosetAlbums');
+    if (savedCloset) setCloset(JSON.parse(savedCloset));
+
+    const savedSessions = localStorage.getItem('styleSessions');
+    if (savedSessions) {
+      const parsed = JSON.parse(savedSessions);
+      setSessions(parsed);
+      if (parsed.length > 0) loadSession(parsed[0]);
+    } else {
+      createNewSession();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persistent Camera Initialization
   useEffect(() => {
+    if (activeTab === 'trends' && trends.length === 0) {
+      setLoadingTrends(true);
+      fetch('http://localhost:3001/api/trends')
+        .then(res => res.json())
+        .then(data => {
+          setTrends(data);
+          setLoadingTrends(false);
+        })
+        .catch(err => {
+          console.error(err);
+          setLoadingTrends(false);
+        });
+    }
+  }, [activeTab, trends.length]);
+
+  const handleStyleChange = (newStyle: string) => {
+    if (messages.length > 2 || styleGallery.length > 0) {
+      setPendingStyle(newStyle);
+      setShowSavePrompt(true);
+    } else {
+      setPreferences(newStyle);
+    }
+  };
+
+  const confirmNewSession = () => {
+    if (pendingStyle) createNewSession(pendingStyle);
+    setShowSavePrompt(false);
+    setPendingStyle(null);
+  };
+
+  const saveCurrentSession = useCallback(() => {
+    if (!currentSessionId) return;
+    setSessions(prev => {
+      const updated = prev.map(s => 
+        s.id === currentSessionId 
+          ? { 
+              ...s, 
+              targetStyle: preferences, 
+              gallery: styleGallery, 
+              insights: insights, 
+              messages: messages,
+              currentLook: currentLookImg || undefined,
+              inspiration: inspirationImg || undefined
+            } 
+          : s
+      );
+      localStorage.setItem('styleSessions', JSON.stringify(updated));
+      return updated;
+    });
+  }, [currentSessionId, preferences, styleGallery, insights, messages, currentLookImg, inspirationImg]);
+
+  useEffect(() => {
+    const timer = setTimeout(saveCurrentSession, 1500);
+    return () => clearTimeout(timer);
+  }, [saveCurrentSession]);
+
+  // Audio State
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const nextAudioStartTimeRef = useRef<number>(0);
+
+  const playPCMChunk = (base64: string) => {
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        nextAudioStartTimeRef.current = audioContextRef.current.currentTime;
+      }
+
+      if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+      }
+
+      // Faster base64 to Uint8Array
+      const binaryString = window.atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Convert 16-bit PCM to Float32
+      const pcm16 = new Int16Array(bytes.buffer);
+      const float32Data = new Float32Array(pcm16.length);
+      for (let i = 0; i < pcm16.length; i++) {
+        float32Data[i] = pcm16[i] / 32768.0;
+      }
+
+      const audioBuffer = audioContextRef.current.createBuffer(1, float32Data.length, 24000);
+      audioBuffer.getChannelData(0).set(float32Data);
+
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextRef.current.destination);
+
+      const startTime = Math.max(audioContextRef.current.currentTime, nextAudioStartTimeRef.current);
+      source.start(startTime);
+      nextAudioStartTimeRef.current = startTime + audioBuffer.duration;
+    } catch (err) {
+      console.error("PCM Playback failed:", err);
+    }
+  };
+
+  // Synchronize Preferences with AI Session
+  useEffect(() => {
+    if (isConnected && wsRef.current?.readyState === WebSocket.OPEN && preferences) {
+      // Debounce slightly if needed, but for goal updates we want it clear
+      const timer = setTimeout(() => {
+        wsRef.current?.send(JSON.stringify({ text: `Update Goal: ${preferences}` }));
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [preferences, isConnected]);
+
+  // Video Frame Capture
+  useEffect(() => {
+    let interval: any;
+    if (isConnected && cameraStreamRef.current) {
+      interval = setInterval(() => {
+        if (videoRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+          const canvas = document.createElement('canvas');
+          canvas.width = 480;
+          canvas.height = 360;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+            wsRef.current.send(JSON.stringify({
+              realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: base64 }] }
+            }));
+          }
+        }
+      }, 1500);
+    }
+    return () => clearInterval(interval);
+  }, [isConnected, !!cameraStreamRef.current]);
+
+  // --- AI & Analysis ---
+
+  const connect = useCallback(() => {
     if (!user) return;
     
-    const startCamera = async () => {
-        try {
-            if (!cameraStreamRef.current) {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                cameraStreamRef.current = stream;
-            }
-            if (activeTab === 'stylist' && videoRef.current) {
-                videoRef.current.srcObject = cameraStreamRef.current;
-            }
-        } catch (err) {
-            console.error("Error accessing camera:", err);
+    // Resume audio context immediately on user click
+    if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    }
+    audioContextRef.current.resume();
+
+    const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
+    wsRef.current = ws;
+    ws.onopen = () => {
+        setIsConnected(true);
+    };
+    ws.onclose = () => setIsConnected(false);
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.text) setMessages(prev => [...prev, { role: 'ai', text: data.text }]);
+      if (data.audio) playPCMChunk(data.audio);
+      if (data.toolCallResult) {
+        const { name, result } = data.toolCallResult;
+        if (name === 'update_style_insights') setInsights(result);
+        if (name === 'generate_style_batch') setStyleGallery(result.suggestions);
+      }
+    };
+  }, [user]);
+
+  const analyzeNow = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    
+    if (audioContextRef.current?.state === 'suspended') {
+        audioContextRef.current.resume();
+    }
+
+    let analysisCommand = `STRICTLY analyze my current look for ONLY the goal "${preferences}". FORGET all previous styles. Start by acknowledging that you see me.`;
+    
+    if (inspirationImg) {
+      analysisCommand += " Tailor everything specifically based on my Inspiration image aesthetic.";
+    }
+
+    if (!cameraStreamRef.current && currentLookImg) {
+      analysisCommand += " Reference my uploaded Current Look photo.";
+    } else if (cameraStreamRef.current) {
+      analysisCommand += " Use my live camera feed to see what I'm wearing right now.";
+    }
+
+    wsRef.current.send(JSON.stringify({ text: analysisCommand }));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'inspiration' | 'current_look') => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        if (type === 'current_look') setCurrentLookImg(base64);
+        else setInspirationImg(base64);
+        
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            text: `[User uploaded ${type.replace('_', ' ')}]`,
+            realtimeInput: { mediaChunks: [{ mimeType: file.type, data: base64.split(',')[1] }] }
+          }));
         }
-    };
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
-    startCamera();
+  const handleLike = (item: StyleItem) => {
+    const albumKey = preferences || 'Uncategorized';
+    setCloset(prev => {
+      const updatedAlbum = [...(prev[albumKey] || []), item];
+      const newCloset = { ...prev, [albumKey]: updatedAlbum };
+      localStorage.setItem('styleSenseClosetAlbums', JSON.stringify(newCloset));
+      return newCloset;
+    });
+    setMessages(prev => [...prev, { role: 'system', text: `Added to your ${albumKey} album.` }]);
+  };
 
-    return () => {
-        // We keep it running for the AI's vision, but we could stop it on logout
-    };
-  }, [user, activeTab]);
+  // --- Auth ---
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAuthError('');
-    const endpoint = authMode === 'login' ? '/api/login' : '/api/signup';
     try {
-        const res = await fetch(`http://localhost:3001${endpoint}`, {
+        const res = await fetch('http://localhost:3001/api/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: authEmail, password: authPassword })
@@ -77,426 +363,379 @@ const App: React.FC = () => {
         if (res.ok) {
             setUser(data);
             localStorage.setItem('styleSenseUser', JSON.stringify(data));
-        } else {
-            setAuthError(data.error || 'Authentication failed');
-        }
-    } catch (e) { setAuthError('Server connection failed'); }
+        } else { setAuthError(data.error); }
+    } catch (err) { setAuthError('Connection failed'); console.error(err); }
   };
 
-  const handleLogout = () => {
-    disconnect();
-    setUser(null);
-    localStorage.removeItem('styleSenseUser');
-  };
-
-  const playAudio = useCallback(async (base64Data: string) => {
-    if (!audioContextRef.current) return;
-    try {
-        const binaryString = window.atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-        
-        // Gemini Live usually sends 16-bit Mono PCM @ 24kHz
-        const floatData = new Float32Array(bytes.length / 2);
-        for (let i = 0; i < floatData.length; i++) {
-            const int16 = (bytes[i * 2 + 1] << 8) | bytes[i * 2];
-            floatData[i] = (int16 >= 0x8000 ? int16 - 0x10000 : int16) / 32768.0;
-        }
-
-        const audioBuffer = audioContextRef.current.createBuffer(1, floatData.length, 24000);
-        audioBuffer.getChannelData(0).set(floatData);
-
-        const source = audioContextRef.current.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContextRef.current.destination);
-
-        const startTime = Math.max(nextStartTime.current, audioContextRef.current.currentTime);
-        source.start(startTime);
-        nextStartTime.current = startTime + audioBuffer.duration;
-    } catch (err) { console.error("Error playing audio:", err); }
-  }, []);
-
-  const connect = useCallback(() => {
-    if (!user) return;
-    const ws = new WebSocket(`ws://localhost:4002?userId=${user.id}`);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      setIsConnected(true);
-      setMessages((prev) => [...prev, { role: 'system', text: 'Coach Connected' }]);
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-      nextStartTime.current = audioContextRef.current.currentTime;
-    };
-    ws.onclose = () => setIsConnected(false);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      console.log("DEBUG: Received from Backend:", data);
-
-      if (data.text) setMessages((prev) => [...prev, { role: 'ai', text: data.text }]);
-      if (data.audio) playAudio(data.audio);
-
-      if (data.toolCallResult) {
-        const { name, result } = data.toolCallResult;
-        console.log(`DEBUG: Tool Result [${name}]:`, result);
-        if (name === 'update_style_insights') setInsights(result);
-        if (name === 'generate_style_batch') { 
-            console.log("DEBUG: New Style Gallery Data:", result.suggestions);
-            setStyleGallery(result.suggestions); 
-            setFeedIndex(0); 
-        }
-        if (name === 'get_closet') setCloset(result.items);
-        if (name === 'add_to_closet') setCloset(prev => [...prev, result.item]);
-      }
-    };
-  }, [user]);
-
-  const disconnect = useCallback(() => { wsRef.current?.close(); }, []);
-
-  const nextItem = useCallback(() => {
-    if (styleGallery.length > 0) {
-      setFeedIndex((prev) => (prev + 1) % styleGallery.length);
-    }
-  }, [styleGallery.length]);
-
-  const prevItem = useCallback(() => {
-    if (styleGallery.length > 0) {
-      setFeedIndex((prev) => (prev - 1 + styleGallery.length) % styleGallery.length);
-    }
-  }, [styleGallery.length]);
-
-  // Send camera frames to Gemini
-  useEffect(() => {
-    if (!isConnected || !videoRef.current) return;
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
-    const interval = setInterval(() => {
-      if (videoRef.current && ctx && wsRef.current?.readyState === WebSocket.OPEN) {
-        const video = videoRef.current;
-        // Use full video dimensions to avoid cropping
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
-        
-        wsRef.current.send(JSON.stringify({
-          realtimeInput: {
-            video: { mimeType: 'image/jpeg', data: base64 }
-          }
-        }));
-      }
-    }, 1000); // Send every 1000ms (more stable)
-
-    return () => clearInterval(interval);
-  }, [isConnected]);
-
-  const analyzeNow = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ text: "Analyze my look and update the visual gallery with 6 new suggestions." }));
-    }
-  };
-
-  const clearSession = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ text: "CLEAR CONTEXT: Forget our previous conversation and start fresh with my current Target Aesthetic." }));
-    }
-    setMessages([]);
-    setStyleGallery([]);
-    setInsights({ suggestions: 'Waiting...', improvements: '', recommendations: '' });
-  };
-
-  const handleLike = (item: any) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ text: `I love the "${item.name}" suggestion. Add it to my closet.` }));
-    }
-  };
-
-  const playAudioChunk = async (base64Audio: string) => {
-    if (!audioContextRef.current) return;
-    const audioCtx = audioContextRef.current;
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    const binary = window.atob(base64Audio);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const pcm16 = new Int16Array(bytes.buffer);
-    const float32 = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 0x7FFF;
-    const audioBuffer = audioCtx.createBuffer(1, pcm16.length, 24000);
-    audioBuffer.getChannelData(0).set(float32);
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    if (nextStartTime.current < now) nextStartTime.current = now + 0.1;
-    source.start(nextStartTime.current);
-    nextStartTime.current += audioBuffer.duration;
-  };
-
-  const startRecording = async () => {
-    try {
-      if (!audioContextRef.current) audioContextRef.current = new AudioContext({ sampleRate: 16000 });
-      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-      mediaStreamRef.current = stream;
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-      processor.onaudioprocess = (e) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const pcm16 = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
-          const buffer = new ArrayBuffer(pcm16.length * 2);
-          const view = new DataView(buffer);
-          pcm16.forEach((val, i) => view.setInt16(i * 2, val, true));
-          let binary = '';
-          const bytes = new Uint8Array(buffer);
-          for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-          const base64Audio = window.btoa(binary);
-          wsRef.current.send(JSON.stringify({ realtimeInput: { mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: base64Audio }] } }));
-        }
-      };
-      source.connect(processor);
-      processor.connect(audioContextRef.current.destination);
-      setIsRecording(true);
-    } catch (err) { console.error(err); }
-  };
-
-  const stopRecording = () => {
-    if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
-    if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
-    setIsRecording(false);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'inspiration' | 'current_look') => {
-    const file = e.target.files?.[0];
-    if (file && wsRef.current?.readyState === WebSocket.OPEN) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1];
-        wsRef.current?.send(JSON.stringify({
-          text: `[User uploaded a ${type.replace('_', ' ')} image]`,
-          realtimeInput: { mediaChunks: [{ mimeType: file.type, data: base64 }] }
-        }));
-        setMessages(prev => [...prev, { role: 'system', text: `Uploaded ${type.replace('_', ' ')}` }]);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  // Condition rendering for Login/Signup
   if (!user) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-white font-sans flex items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-neutral-950 to-neutral-950">
-        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-10 shadow-2xl">
+      <div className="min-h-screen bg-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md premium-card p-10">
           <div className="text-center mb-10">
-            <div className="w-16 h-16 bg-purple-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-purple-500/20">
-              <ShoppingBag className="w-8 h-8 text-white" />
-            </div>
-            <h1 className="text-3xl font-bold mb-2">StyleSense <span className="text-purple-500">PRO</span></h1>
-            <p className="text-neutral-400 text-sm">{authMode === 'login' ? 'Welcome back! Your personal coach is waiting.' : 'Start your personal style journey today.'}</p>
+            <div className="w-16 h-16 bg-black rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-lg"><Shirt className="text-white w-8 h-8" /></div>
+            <h1 className="text-3xl font-bold tracking-tight">Style_it</h1>
+            <p className="text-neutral-500 text-sm mt-2 font-medium">Elevate your aesthetic journey.</p>
           </div>
-
           <form onSubmit={handleAuth} className="space-y-4">
-            <div className="relative group">
-              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
-              <input 
-                type="email" required placeholder="Email Address" 
-                value={authEmail} onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm"
-              />
-            </div>
-            <div className="relative group">
-              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500 group-focus-within:text-purple-500 transition" />
-              <input 
-                type="password" required placeholder="Password" 
-                value={authPassword} onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-purple-500 transition text-sm"
-              />
-            </div>
-            
-            {authError && <p className="text-red-500 text-xs text-center font-medium bg-red-500/10 py-2 rounded-lg">{authError}</p>}
-
-            <button type="submit" className="w-full bg-white text-black font-bold py-4 rounded-2xl hover:bg-neutral-200 transition-all shadow-xl shadow-white/5 flex items-center justify-center gap-2 mt-6">
-              {authMode === 'login' ? <LogIn className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
-              {authMode === 'login' ? 'Sign In' : 'Create Account'}
-            </button>
+            <input type="email" placeholder="Email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} className="w-full bg-neutral-50 border border-neutral-100 rounded-2xl py-4 px-6 outline-none focus:border-black transition" />
+            <input type="password" placeholder="Password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} className="w-full bg-neutral-50 border border-neutral-100 rounded-2xl py-4 px-6 outline-none focus:border-black transition" />
+            {authError && <p className="text-red-500 text-xs text-center font-bold">{authError}</p>}
+            <button type="submit" className="w-full btn-premium btn-primary justify-center py-4">Sign In</button>
           </form>
-
-          <div className="mt-8 text-center text-sm">
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-neutral-400 hover:text-white transition">
-              {authMode === 'login' ? "Don't have an account? " : "Already have an account? "}
-              <span className="text-purple-500 font-bold ml-1 hover:underline">{authMode === 'login' ? 'Sign Up' : 'Log In'}</span>
-            </button>
-          </div>
         </div>
       </div>
     );
   }
 
-  // Main App Content (when logged in)
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 1280, height: 720 } });
+      cameraStreamRef.current = stream;
+      // We use a small timeout to ensure the DOM element is rendered before attaching the stream
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(console.error);
+        }
+      }, 100);
+      setMessages(prev => [...prev]); 
+    } catch (err) {
+      console.error("Camera access denied:", err);
+    }
+  };
+
+  const stopCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach(t => t.stop());
+    cameraStreamRef.current = null;
+    // Force re-render
+    setMessages(prev => [...prev]);
+  };
+
+  const clearInsights = () => {
+    setMessages([]);
+    setInsights({ suggestions: 'Waiting...' });
+    setStyleGallery([]);
+  };
+
   return (
-    <div className="min-h-screen bg-neutral-950 text-white font-sans flex overflow-hidden">
-      <div className="w-80 p-6 border-r border-neutral-800 flex flex-col gap-6 bg-neutral-900/20">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <ShoppingBag className="text-purple-400 w-8 h-8" />
-            <h1 className="text-xl font-bold tracking-tight">StyleSense <span className="text-purple-500">PRO</span></h1>
-          </div>
-          <button onClick={handleLogout} className="p-2 hover:bg-neutral-800 rounded-lg text-neutral-500 hover:text-red-400 transition" title="Logout"><LogOut className="w-5 h-5" /></button>
+    <div className="flex h-screen bg-white overflow-hidden text-neutral-900">
+      
+      {/* SIDEBAR */}
+      <aside className="w-[280px] bg-[#f8f9fa] border-r border-[#e9ecef] flex flex-col p-6 shrink-0">
+        <div className="flex items-center gap-3 mb-10 px-2">
+          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center"><Shirt className="text-white w-5 h-5" /></div>
+          <span className="font-bold text-lg">Style_it</span>
         </div>
-        <div className="flex items-center gap-3 p-4 bg-neutral-900/50 border border-neutral-800 rounded-2xl">
-            <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-sm font-bold">{user.email[0].toUpperCase()}</div>
-            <div className="overflow-hidden">
-                <p className="text-[10px] text-neutral-500 uppercase font-bold tracking-widest">Logged In As</p>
-                <p className="text-xs font-medium truncate">{user.email}</p>
-            </div>
-        </div>
-        <nav className="flex flex-col gap-2">
-          <button onClick={() => setActiveTab('stylist')} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition ${activeTab === 'stylist' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20' : 'hover:bg-neutral-800 text-neutral-400'}`}><Camera className="w-5 h-5" /> Live Stylist</button>
-          <button onClick={() => setActiveTab('closet')} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition ${activeTab === 'closet' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20' : 'hover:bg-neutral-800 text-neutral-400'}`}><LayoutGrid className="w-5 h-5" /> My Closet</button>
-          <button onClick={() => setActiveTab('trends')} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition ${activeTab === 'trends' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20' : 'hover:bg-neutral-800 text-neutral-400'}`}><TrendingUp className="w-5 h-5" /> Style Trends</button>
+
+        <nav className="flex flex-col gap-1 mb-10">
+          <button onClick={() => setActiveTab('live')} className={`nav-link ${activeTab === 'live' ? 'active' : ''}`}><Camera className="w-5 h-5" /> Live Session</button>
+          <button onClick={() => setActiveTab('closet')} className={`nav-link ${activeTab === 'closet' ? 'active' : ''}`}><ShoppingBag className="w-5 h-5" /> My Closet</button>
+          <button onClick={() => setActiveTab('trends')} className={`nav-link ${activeTab === 'trends' ? 'active' : ''}`}><TrendingUp className="w-5 h-5" /> Style Trends</button>
+          <button onClick={() => setActiveTab('settings')} className={`nav-link ${activeTab === 'settings' ? 'active' : ''}`}><Settings className="w-5 h-5" /> Settings</button>
         </nav>
-        <div className="mt-auto flex flex-col gap-4">
-           <div className="flex flex-col gap-2">
-            <span className="text-xs font-semibold text-neutral-500 uppercase tracking-wider">Target Aesthetic</span>
-            <div className="flex gap-2">
-              <textarea value={preferences} onChange={(e) => setPreferences(e.target.value)} placeholder="e.g. Minimalist" className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg p-3 text-sm h-20 outline-none focus:border-purple-500 transition resize-none" />
-              <button onClick={() => wsRef.current?.send(JSON.stringify({ text: `Update Goal: ${preferences}` }))} disabled={!isConnected} className="p-3 bg-neutral-800 rounded-lg hover:bg-neutral-700 transition self-end"><Save className="w-4 h-4 text-purple-400" /></button>
+
+        {activeTab === 'live' && (
+          <div className="mb-6 px-2">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest">Sessions</span>
+              <button onClick={() => createNewSession()} className="p-1 hover:bg-white rounded-md transition"><PlusCircle className="w-4 h-4 text-neutral-400" /></button>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {!isConnected ? <button onClick={connect} className="col-span-2 bg-white text-black py-3 rounded-xl font-bold hover:bg-neutral-200 transition">START</button> : <button onClick={() => wsRef.current?.close()} className="col-span-2 bg-red-500/10 text-red-500 border border-red-500/20 py-3 rounded-xl font-bold">STOP</button>}
-            <button onClick={analyzeNow} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-purple-600/20 text-purple-400 border border-purple-500/20 hover:bg-purple-600/30'}`}><RefreshCw className={`w-4 h-4 ${isConnected ? 'animate-spin-slow' : ''}`} /><span className="text-xs font-bold uppercase">Analyze My Look</span></button>
-            <button onClick={clearSession} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'}`}><X className="w-4 h-4" /><span className="text-xs font-bold uppercase">Clear Chat</span></button>
-            <input type="file" ref={inspirationInputRef} onChange={(e) => handleFileUpload(e, 'inspiration')} accept="image/*" className="hidden" />
-            <button onClick={() => inspirationInputRef.current?.click()} disabled={!isConnected} className={`p-3 rounded-xl transition flex flex-col items-center gap-1 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-neutral-800 text-purple-400 hover:bg-neutral-700'}`}><ImageIcon className="w-5 h-5" /><span className="text-[10px] font-bold uppercase">Inspo</span></button>
-            <input type="file" ref={currentLookInputRef} onChange={(e) => handleFileUpload(e, 'current_look')} accept="image/*" className="hidden" />
-            <button onClick={() => currentLookInputRef.current?.click()} disabled={!isConnected} className={`p-3 rounded-xl transition flex flex-col items-center gap-1 ${!isConnected ? 'bg-neutral-800 text-neutral-500' : 'bg-neutral-800 text-pink-400 hover:bg-neutral-700'}`}><UserCircle className="w-5 h-5" /><span className="text-[10px] font-bold uppercase">Current</span></button>
-            <button onMouseDown={startRecording} onMouseUp={stopRecording} onMouseLeave={stopRecording} disabled={!isConnected} className={`col-span-2 p-3 rounded-xl transition flex items-center justify-center gap-2 ${isRecording ? 'bg-red-500 text-white shadow-[0_0_20px_rgba(239,68,68,0.4)]' : 'bg-neutral-800 text-white hover:bg-neutral-700'}`}>{isRecording ? <div className="flex gap-1 items-center"><div className="w-1 h-4 bg-white animate-pulse" /><div className="w-1 h-6 bg-white animate-pulse delay-75" /><div className="w-1 h-4 bg-white animate-pulse delay-150" /></div> : <Mic className="w-5 h-5" />}<span className="text-xs font-bold uppercase">Push to Talk</span></button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex-1 flex flex-col">
-        {activeTab === 'stylist' && (
-          <div className="flex-1 flex gap-6 p-8 overflow-hidden relative">
-            <div className="flex-1 flex flex-col gap-6 relative">
-              <div className="relative h-[500px] rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl shrink-0">
-                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain transform scale-x-[-1]" />
-                <div className={`absolute top-6 left-6 flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-xl border border-white/10 rounded-full text-[10px] font-bold ${isConnected ? 'text-white' : 'text-neutral-500'}`}><div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-neutral-700'}`} /> {isConnected ? 'LIVE' : 'INACTIVE'}</div>
-              </div>
-              
-              <div className="flex-1 rounded-3xl border border-neutral-800 bg-neutral-900/40 relative overflow-hidden flex items-center justify-center p-4">
-                {styleGallery.length > 0 ? (
-                  <div className="w-full h-full relative">
-                    <img 
-                        src={styleGallery[feedIndex].imageUrl} alt="Look" 
-                        className="w-full h-full object-contain rounded-2xl animate-in fade-in zoom-in-95 duration-500" 
-                        onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            const keyword = encodeURIComponent(`${styleGallery[feedIndex].style_keyword || styleGallery[feedIndex].name} fashion editorial`);
-                            if (!target.src.includes('pollinations.ai')) {
-                                target.src = `https://image.pollinations.ai/prompt/${keyword}?width=800&height=1000&nologo=true&seed=${Date.now()}`;
-                            }
-                        }}
-                    />
-                    <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
-                        <button onClick={prevItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronUp className="w-6 h-6" /></button>
-                        <button onClick={nextItem} className="p-3 bg-black/60 rounded-full hover:bg-purple-600 transition shadow-xl"><ChevronDown className="w-6 h-6" /></button>
-                    </div>
-                    <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between bg-gradient-to-t from-black/80 to-transparent p-6 rounded-b-2xl">
-                        <div className="max-w-[60%]">
-                            <h4 className="text-xl font-bold text-white mb-1">{styleGallery[feedIndex].name}</h4>
-                            <p className="text-xs text-neutral-300 line-clamp-2">{styleGallery[feedIndex].reason}</p>
-                        </div>
-                        <div className="flex gap-2">
-                            <button onClick={() => handleLike(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-pink-500/20 transition group border border-white/10"><Heart className="w-5 h-5 text-white group-hover:text-pink-500 transition" /></button>
-                            <button 
-                                onClick={() => window.open(styleGallery[feedIndex].shop_url, '_blank')}
-                                className="px-4 py-3 bg-purple-600 text-white rounded-2xl hover:bg-purple-500 transition shadow-xl flex items-center gap-2 border border-purple-400/20"
-                            >
-                                <ShoppingBag className="w-5 h-5" />
-                                <span className="text-[10px] font-bold uppercase tracking-widest">Shop</span>
-                            </button>
-                            <button onClick={() => setSelectedItem(styleGallery[feedIndex])} className="p-3 bg-white/10 backdrop-blur-md rounded-2xl hover:bg-white/20 transition border border-white/10"><Store className="w-5 h-5 text-white" /></button>
-                        </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center"><Sparkles className="w-8 h-8 text-purple-500 mx-auto mb-3 opacity-50" /><p className="text-neutral-500 text-sm">Targeting real-world styles for you...</p></div>
-                )}
-              </div>
+            <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
+              {sessions.map(s => (
+                <button key={s.id} onClick={() => loadSession(s)} className={`text-left text-xs px-3 py-2 rounded-lg transition ${currentSessionId === s.id ? 'bg-white shadow-sm font-semibold' : 'text-neutral-500 hover:text-black'}`}>{s.name}</button>
+              ))}
             </div>
-
-            <div className="w-96 flex flex-col gap-6">
-              <div className="p-6 rounded-3xl bg-white text-black shadow-xl shrink-0">
-                <h3 className="font-bold flex items-center gap-2 mb-4 text-neutral-900"><Shirt className="w-4 h-4" /> Advice Summary</h3>
-                <div className="flex flex-col gap-3 text-sm">
-                  <p className="font-medium leading-relaxed">{insights.summary || 'Coach is watching your feed...'}</p>
-                  {insights.top_tip && (
-                    <div className="p-3 bg-purple-50 rounded-xl border border-purple-100 flex gap-2">
-                        <Sparkles className="w-4 h-4 text-purple-500 shrink-0" />
-                        <p className="text-[11px] text-purple-900 font-bold leading-tight">{insights.top_tip}</p>
-                    </div>
-                  )}
-                  <button onClick={() => setShowReport(true)} disabled={!isConnected} className={`flex items-center gap-2 font-bold text-xs mt-2 transition ${!isConnected ? 'text-neutral-400 cursor-not-allowed' : 'text-purple-600 hover:text-purple-800'}`}><FileText className="w-4 h-4" /> FULL ANALYSIS</button>
-                </div>
-              </div>
-              <div className="flex-1 flex flex-col rounded-3xl bg-neutral-900/40 border border-neutral-800 overflow-hidden">
-                <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-4">{messages.map((m, i) => <div key={i} className={`p-4 rounded-2xl text-sm max-w-[90%] ${m.role === 'ai' ? 'bg-neutral-800 text-white self-start' : m.role === 'system' ? 'text-neutral-500 text-center italic text-xs w-full' : 'bg-purple-600 text-white self-end'}`}>{m.text}</div>)}</div>
-              </div>
-            </div>
-
-            {showReport && (
-              <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-10">
-                <div className="bg-neutral-900 border border-neutral-800 w-full max-w-2xl rounded-3xl p-8 flex flex-col max-h-[80vh] shadow-2xl text-white">
-                  <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold flex items-center gap-3"><FileText className="text-purple-500" /> Style Report</h2><button onClick={() => setShowReport(false)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
-                  <div className="flex-1 overflow-y-auto space-y-6 text-neutral-300 pr-4 custom-scrollbar">
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Executive Summary</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50">{insights.summary}</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Pro Tip</h4><p className="leading-relaxed bg-purple-900/20 p-4 rounded-2xl border border-purple-500/30 text-white font-medium italic">"{insights.top_tip}"</p></section>
-                    <section><h4 className="text-white font-bold mb-2 uppercase text-[10px] tracking-widest text-purple-400">Full Coaching Advice</h4><p className="leading-relaxed bg-neutral-800/50 p-4 rounded-2xl border border-neutral-700/50 text-sm whitespace-pre-wrap">{insights.vocal_script}</p></section>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {selectedItem && (
-              <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-10">
-                <div className="bg-neutral-900 border border-neutral-800 w-full max-w-4xl rounded-3xl overflow-hidden flex shadow-2xl h-[70vh] text-white">
-                  <img src={selectedItem.imageUrl} className="w-1/2 object-cover" onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      if (!target.src.includes('pollinations.ai')) {
-                        const keyword = encodeURIComponent(`${selectedItem.style_keyword || selectedItem.name} fashion editorial`);
-                        target.src = `https://image.pollinations.ai/prompt/${keyword}?width=800&height=1000&nologo=true&seed=${Date.now()}`;
-                      }
-                  }} />
-                  <div className="w-1/2 p-10 flex flex-col h-full bg-neutral-900">
-                    <div className="flex justify-between items-start mb-6"><div><h2 className="text-3xl font-bold mb-2">{selectedItem.name}</h2><p className="text-neutral-400 text-sm">{selectedItem.reason}</p></div><button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-neutral-800 rounded-full"><X /></button></div>
-                    <div className="mt-auto">
-                        <h4 className="font-bold flex items-center gap-2 mb-4 text-purple-400 uppercase text-xs tracking-widest"><Store className="w-4 h-4" /> Retail Locations</h4>
-                        <div className="grid grid-cols-1 gap-3">
-                            {selectedItem.retailers?.map((r: string) => (
-                                <div 
-                                    key={r} 
-                                    onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(selectedItem.name + " " + r)}`, '_blank')}
-                                    className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-700 hover:border-purple-500 transition group cursor-pointer"
-                                >
-                                    <span className="font-medium text-sm">{r}</span>
-                                    <ExternalLink className="w-4 h-4 text-neutral-500 group-hover:text-purple-400" />
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
-        {activeTab === 'closet' && <div className="flex-1 p-8 overflow-y-auto text-white"><h2 className="text-3xl font-bold mb-8">My Closet</h2><div className="grid grid-cols-4 gap-6">{closet.map((item, i) => <div key={i} onClick={() => setSelectedItem(item)} className="group relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900/40 cursor-pointer hover:border-purple-500 transition shadow-xl aspect-[3/4]"><img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover transition duration-500 group-hover:scale-105" onError={(e) => { const target = e.target as HTMLImageElement; if (!target.src.includes('pollinations.ai')) { const kw = encodeURIComponent(`${item.style_keyword || item.name} fashion editorial`); target.src = `https://image.pollinations.ai/prompt/${kw}?width=800&height=1000&nologo=true&seed=${Date.now()}`; } }} /><div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent opacity-0 group-hover:opacity-100 transition p-4 flex flex-col justify-end"><h4 className="font-bold text-white text-sm">{item.name}</h4></div></div>)}</div></div>}
-      </div>
+
+        <div className="mt-auto pt-6 border-t border-[#e9ecef] flex items-center gap-3">
+          <div className="w-10 h-10 bg-neutral-200 rounded-full flex items-center justify-center font-bold">{user.email[0].toUpperCase()}</div>
+          <div className="flex-1 overflow-hidden">
+            <p className="text-sm font-semibold truncate">{user.email.split('@')[0]}</p>
+            <p className="text-[10px] text-neutral-500 uppercase font-bold tracking-widest">Premium</p>
+          </div>
+          <button onClick={() => setUser(null)} className="p-2 hover:bg-neutral-200 rounded-lg text-neutral-400"><LogOut className="w-4 h-4" /></button>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT */}
+      <main className="flex-1 flex flex-col overflow-y-auto bg-white relative">
+        
+        {activeTab === 'live' && (
+          <>
+            <header className="px-10 py-6 border-b border-[#e9ecef] flex flex-col gap-4 bg-white/90 backdrop-blur-md sticky top-0 z-20">
+              <div className="flex items-center justify-between gap-6">
+                <div className="flex-1 max-w-2xl flex items-center gap-4">
+                  <span className="text-sm font-bold text-neutral-400">Target Style</span>
+                  <input 
+                    type="text" 
+                    value={preferences} 
+                    onChange={e => handleStyleChange(e.target.value)}
+                    placeholder="Describe your aesthetic..." 
+                    className="flex-1 bg-neutral-50 border border-neutral-100 rounded-2xl py-3.5 px-6 outline-none focus:border-black transition font-semibold"
+                  />
+                </div>
+                <div className="flex items-center gap-4">
+                  <button onClick={connect} disabled={isConnected} className={`btn-premium ${isConnected ? 'bg-green-50 text-green-600 border-green-100' : 'btn-secondary'}`}>{isConnected ? 'Connected' : 'Connect AI'}</button>
+                  <button onClick={analyzeNow} className="btn-premium btn-primary"><Sparkles className="w-4 h-4" /> Analyze Now</button>
+                </div>
+              </div>
+            </header>
+
+            <div className="px-10 py-8 max-w-5xl mx-auto w-full space-y-10 animate-fade-in">
+              <section className="grid grid-cols-2 gap-6">
+                <div className="upload-zone aspect-video flex flex-col items-center justify-center relative overflow-hidden group">
+                  {cameraStreamRef.current ? (
+                    <div className="w-full h-full relative">
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1]" />
+                      <button onClick={stopCamera} className="absolute top-4 right-4 p-2.5 bg-black/40 backdrop-blur-md rounded-full text-white hover:bg-black/60 transition shadow-lg"><X className="w-4 h-4" /></button>
+                    </div>
+                  ) : currentLookImg ? (
+                    <div className="w-full h-full relative">
+                      <img src={currentLookImg} alt="Look" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                         <button onClick={() => currentLookInputRef.current?.click()} title="Change Photo" className="p-3 bg-white rounded-full text-black hover:scale-110 transition"><ImageIcon className="w-5 h-5" /></button>
+                         <button onClick={startCamera} title="Use Camera" className="p-3 bg-white rounded-full text-black hover:scale-110 transition"><Camera className="w-5 h-5" /></button>
+                         <button onClick={() => setCurrentLookImg(null)} title="Clear Image" className="p-3 bg-white rounded-full text-red-500 hover:scale-110 transition"><Trash2 className="w-5 h-5" /></button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center flex flex-col items-center gap-4 p-6">
+                      <div className="flex gap-4">
+                        <button onClick={() => currentLookInputRef.current?.click()} className="flex flex-col items-center gap-2 p-4 rounded-2xl border border-neutral-100 hover:bg-neutral-50 transition">
+                          <ImageIcon className="w-6 h-6 text-neutral-400" />
+                          <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Upload Photo</span>
+                        </button>
+                        <button onClick={startCamera} className="flex flex-col items-center gap-2 p-4 rounded-2xl border border-neutral-100 hover:bg-neutral-50 transition">
+                          <Camera className="w-6 h-6 text-neutral-400" />
+                          <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Use Camera</span>
+                        </button>
+                      </div>
+                      <p className="text-[11px] font-medium text-neutral-400">Current Outfit Reference</p>
+                    </div>
+                  )}
+                  <input type="file" ref={currentLookInputRef} hidden onChange={e => handleFileUpload(e, 'current_look')} />
+                </div>
+
+                <div className="upload-zone aspect-video flex flex-col items-center justify-center relative overflow-hidden group">
+                  {inspirationImg ? (
+                    <div className="w-full h-full relative">
+                      <img src={inspirationImg} alt="Inspiration" className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                         <button onClick={() => inspirationInputRef.current?.click()} title="Change Photo" className="p-3 bg-white rounded-full text-black hover:scale-110 transition"><RefreshCw className="w-5 h-5" /></button>
+                         <button onClick={() => setInspirationImg(null)} title="Clear Image" className="p-3 bg-white rounded-full text-red-500 hover:scale-110 transition"><Trash2 className="w-5 h-5" /></button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div onClick={() => inspirationInputRef.current?.click()} className="text-center cursor-pointer p-6 hover:bg-neutral-50 transition rounded-3xl w-full h-full flex flex-col items-center justify-center gap-2">
+                      <LayoutGrid className="w-8 h-8 text-neutral-300 mx-auto" />
+                      <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Inspiration Image</p>
+                    </div>
+                  )}
+                  <input type="file" ref={inspirationInputRef} hidden onChange={e => handleFileUpload(e, 'inspiration')} />
+                </div>
+              </section>
+
+              <section className="space-y-6 pb-20">
+                <h2 className="text-xl font-bold tracking-tight">Discovery</h2>
+                <div className="grid grid-cols-3 gap-6">
+                  {styleGallery.length > 0 ? styleGallery.map((item, i) => (
+                    <div key={i} className="premium-card p-6 flex flex-col gap-4">
+                      <div className="flex-1">
+                        <h4 className="font-bold text-sm mb-1">{item.name}</h4>
+                        <p className="text-[11px] text-neutral-500 leading-relaxed line-clamp-3 mb-2">{item.reason}</p>
+                        {item.retailers && item.retailers.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {item.retailers.map((r, ri) => (
+                              <button 
+                                key={ri} 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(`https://www.google.com/search?q=${encodeURIComponent(item.name + ' ' + r)}`, '_blank');
+                                }}
+                                className="text-[9px] bg-neutral-50 border border-neutral-100 px-2 py-0.5 rounded-full font-bold text-neutral-500 uppercase tracking-tighter flex items-center gap-1.5 hover:bg-neutral-100 hover:border-neutral-200 transition"
+                              >
+                                <ShoppingBag className="w-2.5 h-2.5 text-neutral-400" />
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => handleLike(item)} className="p-3 bg-neutral-50 hover:bg-neutral-100 rounded-xl transition text-neutral-400 hover:text-red-500"><Heart className="w-4 h-4" /></button>
+                        <button 
+                          onClick={() => window.open(item.shop_url || `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(item.name)}`, '_blank')} 
+                          className="flex-1 btn-premium btn-primary justify-center text-[11px] py-2.5 font-bold uppercase tracking-widest gap-2"
+                        >
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                          Google Shop
+                        </button>
+                      </div>
+                    </div>
+                  )) : <div className="col-span-3 py-20 text-center text-neutral-400 italic">Generate insights to see recommendations...</div>}
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'closet' && (
+          <div className="p-10 max-w-6xl mx-auto w-full animate-fade-in">
+            <h1 className="text-3xl font-bold mb-10">My Closet</h1>
+            <div className="space-y-12">
+              {Object.keys(closet).length > 0 ? Object.entries(closet).map(([album, items]) => (
+                <section key={album}>
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="font-bold text-lg flex items-center gap-2 text-neutral-900 border-l-4 border-black pl-4 uppercase tracking-widest text-sm">{album}</h3>
+                    <span className="text-xs font-bold text-neutral-400">{items.length} items</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-6">
+                    {items.map((item, idx) => (
+                      <div key={idx} className="premium-card group">
+                        <div className="p-8 text-center bg-neutral-50 rounded-t-3xl border-b border-neutral-100">
+                           <Shirt className="w-8 h-8 text-neutral-200 mx-auto" />
+                        </div>
+                        <div className="p-4">
+                          <p className="font-bold text-xs truncate">{item.name}</p>
+                          <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(item.name)}&tbm=shop`, '_blank')} className="text-[10px] font-bold text-neutral-400 hover:text-black mt-2 flex items-center gap-1">GO TO SHOP <ExternalLink className="w-3 h-3" /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )) : <div className="py-40 text-center text-neutral-400">No items in your closet yet. Like recommendations to save them here!</div>}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'trends' && (
+          <div className="p-10 max-w-3xl mx-auto w-full animate-fade-in">
+            <h1 className="text-3xl font-bold mb-2">Style Trends</h1>
+            <p className="text-neutral-500 mb-10 font-medium">Global fashion insights</p>
+            <div className="space-y-0">
+              {loadingTrends ? (
+                <div className="py-20 text-center text-neutral-400">Loading live trends...</div>
+              ) : trends.length > 0 ? trends.map((t, i) => (
+                <div key={i} className="trend-card group cursor-pointer hover:bg-neutral-50 -mx-6 px-6 transition">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">{t.source} • {t.time}</span>
+                    <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">{t.trend}</span>
+                  </div>
+                  <h3 className="text-lg font-bold group-hover:underline">{t.title}</h3>
+                  <div className="mt-4 flex gap-4">
+                    <button onClick={() => window.open(t.url, '_blank')} className="text-[11px] font-bold flex items-center gap-1.5 text-neutral-400 hover:text-black transition"><Globe className="w-3 h-3" /> View News</button>
+                    <button onClick={() => setPreferences(t.title)} className="text-[11px] font-bold flex items-center gap-1.5 text-neutral-400 hover:text-black transition"><TrendingUp className="w-3 h-3" /> Analyze Impact</button>
+                  </div>
+                </div>
+              )) : (
+                <div className="py-20 text-center text-neutral-400">No trends available right now.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="p-10 max-w-3xl mx-auto w-full animate-fade-in">
+            <h1 className="text-3xl font-bold mb-10">Settings</h1>
+            <div className="space-y-8">
+              <section className="premium-card p-6 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-neutral-900 rounded-full flex items-center justify-center font-bold text-white text-lg">{user.email[0].toUpperCase()}</div>
+                  <div><p className="font-bold">{user.email}</p><p className="text-xs text-neutral-500">Premium Stylist Member</p></div>
+                </div>
+                <button className="btn-premium btn-secondary text-xs">Edit Profile</button>
+              </section>
+              <section className="space-y-4">
+                <h3 className="text-xs font-bold text-neutral-400 uppercase tracking-widest px-2">Preferences</h3>
+                <div className="premium-card overflow-hidden">
+                  <div onClick={() => setNotifications(!notifications)} className="p-4 border-b border-neutral-100 flex items-center justify-between hover:bg-neutral-50 cursor-pointer">
+                    <div className="flex items-center gap-3"><Bell className="w-4 h-4" /><span className="text-sm font-medium">Notifications</span></div>
+                    <div className={`w-10 h-5 rounded-full transition-colors flex items-center px-1 ${notifications ? 'bg-black' : 'bg-neutral-200'}`}>
+                      <div className={`w-3 h-3 bg-white rounded-full transition-transform ${notifications ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </div>
+                  </div>
+                  <div onClick={() => setPrivacy(!privacy)} className="p-4 border-b border-neutral-100 flex items-center justify-between hover:bg-neutral-50 cursor-pointer">
+                    <div className="flex items-center gap-3"><Shield className="w-4 h-4" /><span className="text-sm font-medium">Privacy & Security Mode</span></div>
+                    <div className={`w-10 h-5 rounded-full transition-colors flex items-center px-1 ${privacy ? 'bg-black' : 'bg-neutral-200'}`}>
+                      <div className={`w-3 h-3 bg-white rounded-full transition-transform ${privacy ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </div>
+                  </div>
+                  <div onClick={() => { localStorage.clear(); window.location.reload(); }} className="p-4 flex items-center justify-between hover:bg-red-50 cursor-pointer text-red-500">
+                    <div className="flex items-center gap-3"><Trash2 className="w-4 h-4" /><span className="text-sm font-medium">Clear Usage History</span></div>
+                  </div>
+                </div>
+              </section>
+              <button onClick={() => setUser(null)} className="w-full btn-premium btn-secondary border-red-100 text-red-500 hover:bg-red-50 justify-center">Logout Session</button>
+            </div>
+          </div>
+        )}
+
+        {showSavePrompt && (
+          <div className="fixed inset-0 z-[100] bg-black/20 backdrop-blur-sm flex items-center justify-center p-6">
+            <div className="w-full max-sm premium-card p-8 animate-fade-in">
+              <h3 className="font-bold text-lg mb-2">Save current session?</h3>
+              <p className="text-sm text-neutral-500 mb-6 leading-relaxed">You're switching styles. Would you like to save your current progress as a new session?</p>
+              <div className="flex flex-col gap-2">
+                <button onClick={confirmNewSession} className="btn-premium btn-primary justify-center">Save & Switch</button>
+                <button onClick={() => { setPreferences(pendingStyle || ''); setShowSavePrompt(false); setPendingStyle(null); }} className="btn-premium btn-secondary justify-center">Discard & Switch</button>
+                <button onClick={() => { setShowSavePrompt(false); setPendingStyle(null); }} className="text-xs font-bold text-neutral-400 mt-2 py-2">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* RIGHT PANEL (INSIGHTS) */}
+      <aside className="w-[350px] bg-[#f8f9fa] border-l border-[#e9ecef] flex flex-col shrink-0">
+        <header className="p-6 border-b border-[#e9ecef] flex items-center justify-between gap-4">
+           <div className="flex flex-1 gap-2">
+            <button onClick={() => setRightPanelTab('insights')} className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-xl transition ${rightPanelTab === 'insights' ? 'bg-black text-white' : 'text-neutral-400 hover:text-black'}`}>Insights</button>
+            <button onClick={() => setRightPanelTab('report')} className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-xl transition ${rightPanelTab === 'report' ? 'bg-black text-white' : 'text-neutral-400 hover:text-black'}`}>Report</button>
+           </div>
+           <button onClick={clearInsights} title="Clear Insights" className="p-2 hover:bg-neutral-200 rounded-lg text-neutral-400 transition"><RefreshCw className="w-4 h-4" /></button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+          {rightPanelTab === 'insights' ? (
+            <>
+              <section>
+                <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-4">Feedback</h3>
+                <div className="bg-white premium-card p-5 text-sm leading-relaxed text-neutral-700">{insights.summary || 'Waiting for style input...'}</div>
+              </section>
+              {insights.top_tip && (
+                <section>
+                  <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-4">Pro Tip</h3>
+                  <div className="bg-black text-white rounded-3xl p-5 text-sm italic">"{insights.top_tip}"</div>
+                </section>
+              )}
+              <section className="flex-1 flex flex-col min-h-[300px]">
+                <h3 className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest mb-4">Transcript</h3>
+                <div className="bg-white premium-card flex-1 flex flex-col overflow-hidden">
+                  <div className="flex-1 p-4 overflow-y-auto space-y-4 text-[11px]">
+                    {messages.map((m, i) => (
+                      <div key={i} className={`flex ${m.role === 'ai' ? 'justify-start' : 'justify-end'}`}>
+                        <div className={`max-w-[85%] p-3 rounded-2xl ${m.role === 'ai' ? 'bg-neutral-50 text-neutral-600' : 'bg-black text-white'}`}>{m.text}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : (
+            <div className="space-y-6 animate-fade-in">
+              <section className="premium-card p-6 space-y-4">
+                <h4 className="text-xs font-bold uppercase tracking-widest text-neutral-400">Analysis Summary</h4>
+                <p className="text-xs leading-relaxed text-neutral-600">{insights.recommendations || 'Full report will appear here after analysis.'}</p>
+                <div className="pt-4 border-t border-neutral-50 flex flex-col gap-2">
+                  <div className="flex justify-between text-[10px] font-bold"><span>Cohesion</span><span className="text-neutral-400">85%</span></div>
+                  <div className="w-full h-1 bg-neutral-50 rounded-full overflow-hidden"><div className="w-[85%] h-full bg-black" /></div>
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
+      </aside>
     </div>
   );
 };
